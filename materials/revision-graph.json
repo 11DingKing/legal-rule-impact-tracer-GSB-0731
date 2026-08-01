@@ -1,0 +1,21 @@
+{
+  "versions": [
+    {"id": "LAW-V1", "status": "EFFECTIVE", "effectiveFrom": "2026-01-01"},
+    {"id": "LAW-DRAFT-2", "status": "DRAFT", "effectiveFrom": null},
+    {"id": "LAW-V2", "status": "PUBLISHED", "effectiveFrom": "2027-01-01"}
+  ],
+  "articles": [
+    {"stableId": "ART-A", "version": "LAW-V1", "label": "第十条"},
+    {"stableId": "ART-B", "version": "LAW-V1", "label": "第十一条", "references": ["ART-A"]},
+    {"stableId": "ART-A1", "version": "LAW-V2", "label": "第十二条"},
+    {"stableId": "ART-A2", "version": "LAW-V2", "label": "第十三条"}
+  ],
+  "succession": [{"from": "ART-A", "to": ["ART-A1", "ART-A2"], "kind": "SPLIT"}],
+  "bindings": [
+    {"ruleId": "RULE-ELIGIBILITY-01", "articleIds": ["ART-A"]},
+    {"ruleId": "RULE-SERVICE-02", "articleIds": ["ART-B"]}
+  ],
+  "impactLevels": ["DIRECT", "INDIRECT", "UNAFFECTED"],
+  "invariants": ["paths are deterministic", "draft and published-not-effective queries remain distinct", "missing succession is reported rather than guessed"]
+}
+
