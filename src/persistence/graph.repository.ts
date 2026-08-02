@@ -42,9 +42,14 @@ interface BindingRow {
 /**
  * Reads and writes the imported graph. Contains no propagation logic:
  * it only moves rows between SQLite and the domain RevisionGraph shape.
+ *
+ * Caches the assembled graph and invalidates the cache on every upsert, so
+ * readers never observe a graph that predates the latest import.
  */
 @Injectable()
 export class GraphRepository {
+  private cachedGraph: RevisionGraph | null = null;
+
   constructor(private readonly database: DatabaseService) {}
 
   upsertGraph(graph: RevisionGraph): void {
@@ -99,9 +104,16 @@ export class GraphRepository {
         insertBinding.run(binding.ruleId, binding.articleId);
       }
     });
+
+    // Invalidate the read cache: subsequent loadGraph calls must observe
+    // the newly imported rows.
+    this.cachedGraph = null;
   }
 
   loadGraph(): RevisionGraph {
+    if (this.cachedGraph !== null) {
+      return this.cachedGraph;
+    }
     const db = this.database.connection();
 
     const versions = db
@@ -130,7 +142,7 @@ export class GraphRepository {
       )
       .all() as unknown as BindingRow[];
 
-    return {
+    const graph: RevisionGraph = {
       versions: versions.map(
         (row): LawVersion => ({
           id: row.id,
@@ -166,5 +178,8 @@ export class GraphRepository {
         }),
       ),
     };
+
+    this.cachedGraph = graph;
+    return graph;
   }
 }

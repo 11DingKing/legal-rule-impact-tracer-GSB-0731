@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   BadRequestException,
   Injectable,
@@ -18,6 +18,8 @@ export interface ImpactQueryRequest {
 
 export interface ImpactQueryResponse {
   readonly snapshotId: string;
+  /** SHA-256 over the canonical graph slice this query was evaluated against. */
+  readonly graphHash: string;
   readonly result: ImpactResult;
 }
 
@@ -62,6 +64,10 @@ export class ImpactService {
     }
 
     // Freeze query, graph slice and result into an append-only snapshot.
+    // The graph hash binds the snapshot to the exact graph content it used.
+    const graphHash = createHash("sha256")
+      .update(canonicalStringify(graph))
+      .digest("hex");
     const snapshotId = randomUUID();
     this.snapshots.insert({
       id: snapshotId,
@@ -69,8 +75,9 @@ export class ImpactService {
       queryJson: canonicalStringify(query),
       graphJson: canonicalStringify(graph),
       resultJson: canonicalStringify(result),
+      graphHash,
     });
 
-    return { snapshotId, result };
+    return { snapshotId, graphHash, result };
   }
 }

@@ -90,6 +90,7 @@ describe('LAW-DRAFT-2 byte-level determinism (e2e)', () => {
         id: 'LAW-DRAFT-2',
         status: 'DRAFT',
         effectiveFrom: null,
+        effectivenessAtAsOf: 'DRAFT',
       });
 
       const mergeBoth = result.rules.direct.find((r) => r.ruleId === 'RULE-DRAFT-MERGE-BOTH');

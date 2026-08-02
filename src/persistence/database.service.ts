@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
   created_at  TEXT NOT NULL,
   query_json  TEXT NOT NULL,
   graph_json  TEXT NOT NULL,
-  result_json TEXT NOT NULL
+  result_json TEXT NOT NULL,
+  graph_hash  TEXT NOT NULL DEFAULT ''
 );
 `;
 
@@ -79,6 +80,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
     this.db = new DatabaseSync(databasePath);
     this.db.exec(SCHEMA_SQL);
+    this.migrate();
+  }
+
+  /** Idempotent column additions for databases created by older builds. */
+  private migrate(): void {
+    const db = this.connection();
+    const columns = db
+      .prepare("PRAGMA table_info(snapshots)")
+      .all() as unknown as {
+      name: string;
+    }[];
+    if (!columns.some((column) => column.name === "graph_hash")) {
+      db.exec(
+        "ALTER TABLE snapshots ADD COLUMN graph_hash TEXT NOT NULL DEFAULT ''",
+      );
+    }
   }
 
   onModuleDestroy(): void {

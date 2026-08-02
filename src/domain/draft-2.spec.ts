@@ -86,7 +86,9 @@ describe('computeImpact on the LAW-DRAFT-2 draft revision', () => {
       id: 'LAW-DRAFT-2',
       status: 'DRAFT',
       effectiveFrom: null,
+      effectivenessAtAsOf: 'DRAFT',
     });
+    expect(result.versionContext.from.effectivenessAtAsOf).toBe('EFFECTIVE');
   });
 
   it('stores one shortest witness and the equal-length witness count per affected rule', () => {

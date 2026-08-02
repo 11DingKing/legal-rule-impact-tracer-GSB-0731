@@ -58,6 +58,13 @@ the same time; `ART-GONE` declares no succession edge at all and must surface
 as a `MISSING_SUCCESSION` diagnostic; `ART-C1 ↔ ART-C2` form a cross-reference
 cycle and `ART-OBS` cites both, producing two equal-length shortest witnesses.
 
+`materials/v2-amendments.json` arrives later: it moves `LAW-V2`'s effective
+date (`2027-01-01 → 2027-07-01`), adds a `LAW-V2-HOTFIX` version sharing the
+same effective day, adds a cross-reference inside `LAW-V2`, and retroactively
+records the `ART-GONE → ART-G1` succession edge. The retroactive edge only
+affects snapshots created after its import; pre-recording snapshots replay
+their original missing-edge diagnostics without drift.
+
 ## Architecture
 
 ```
@@ -90,7 +97,7 @@ repositories move rows; neither contains graph logic.
 | `succession_edges`   | `(from_id, to_id)`             | `kind` ∈ `RENUMBER / SPLIT / MERGE`; the **only** carrier of article identity across versions |
 | `rule_bindings`      | `(rule_id, article_id)`        | Business rule → bound stable article IDs                                                      |
 | `import_batches`     | `id`, unique `content_hash`    | Idempotency record per imported document                                                      |
-| `snapshots`          | `id`                           | Frozen `query_json`, `graph_json`, `result_json` — append-only                                |
+| `snapshots`          | `id`                           | Frozen `query_json`, `graph_json`, `result_json`, `graph_hash` — append-only                  |
 
 ## API
 
@@ -136,9 +143,13 @@ Response `201`:
 ```json
 {
   "snapshotId": "…",
+  "graphHash": "sha256-of-the-frozen-graph-slice",
   "result": {
     "query": {"fromVersion": "LAW-V1", "toVersion": "LAW-V2", "asOf": "…"},
-    "versionContext": {"from": {"id": "…", "status": "EFFECTIVE", "effectiveFrom": "…"}, "to": {…}},
+    "versionContext": {
+      "from": {"id": "…", "status": "EFFECTIVE", "effectiveFrom": "…", "effectivenessAtAsOf": "EFFECTIVE"},
+      "to":   {"id": "…", "status": "PUBLISHED", "effectiveFrom": "…", "effectivenessAtAsOf": "NOT_YET_EFFECTIVE"}
+    },
     "changedArticles": [{"stableId": "ART-A", "reason": "SUCCESSION", "succession": […]}],
     "missingSuccession": [{"stableId": "ART-B", "boundRuleIds": ["RULE-SERVICE-02"]}],
     "unchangedArticles": [],
@@ -170,11 +181,16 @@ Response `201`:
 
 Lists imported law versions with status and effective date. Draft and
 published-not-effective versions stay distinct query targets; `versionContext`
-in every result records exactly which pair was evaluated.
+in every result records exactly which pair was evaluated, and
+`effectivenessAtAsOf` derives each side's effectiveness at the query moment
+(`DRAFT` / `NOT_YET_EFFECTIVE` / `EFFECTIVE`).
 
 ### `GET /snapshots/:id`
 
-Returns the frozen query, the result, and the traversed edges.
+Returns the frozen query, the graph hash, the result, and the traversed
+edges. Every snapshot binds four things immutably: the law version pair, the
+query moment (`asOf`), the graph snapshot hash (`graphHash`, SHA-256 over the
+canonical frozen graph), and the traversed edge sequence.
 
 ### `GET /snapshots/:id/replay`
 
@@ -183,14 +199,25 @@ snapshot** (never from the live tables) and byte-compares the canonical
 serialization with the stored result:
 
 ```json
-{"snapshotId": "…", "replayedAt": "…", "matchesStored": true, "result": {…}}
+{"snapshotId": "…", "replayedAt": "…", "graphHash": "…", "matchesStored": true, "result": {…}}
 ```
 
 Because the snapshot carries its own copy of the graph, later imports that add
-succession edges or relabel articles cannot change the replay. The e2e suite
-proves this: after importing a new `ART-B → ART-B2` edge, fresh queries classify
-`RULE-SERVICE-02` as DIRECT while the old snapshot still replays its original
-INDIRECT result with `matchesStored: true`.
+succession edges or relabel articles cannot change the replay. The e2e suites
+prove this twice: after importing a new `ART-B → ART-B2` edge, fresh queries
+classify `RULE-SERVICE-02` as DIRECT while the old snapshot still replays its
+original INDIRECT result; and after the retroactive `ART-GONE → ART-G1`
+recording plus the `LAW-V2` effective-date move, the pre-recording snapshot
+still replays its `MISSING_SUCCESSION: ART-GONE` diagnostic and the
+`NOT_YET_EFFECTIVE` reading with `matchesStored: true`.
+
+### Graph read cache and invalidation
+
+`GraphRepository` caches the assembled graph and invalidates the cache on
+every import upsert. Consequences, pinned by tests: two identical queries in a
+row return identical graph hashes and bytes; the first query after any import
+observes the new graph (`graphHash` changes); snapshots taken before the
+import keep their old hash forever.
 
 ## Evaluation semantics (the domain rules)
 
@@ -241,15 +268,19 @@ Given `fromVersion → toVersion`:
 
 ## Native verification
 
-- `npm test` — 26 tests across `src/domain/impact.spec.ts` (split, merge,
-  cycles, missing succession, same-day versions, determinism, large-graph path
-  dedup/sort), `src/domain/draft-2.spec.ts` (draft revision classification,
-  shortest witnesses and equal-length counts, stable diagnostics, reversed
-  record order), `test/app.e2e.spec.ts` (duplicate imports, malformed imports,
-  unknown versions, snapshot immutability under later imports, replay) and
-  `test/draft-2.e2e.spec.ts` (byte-level identity of results, paths and
-  diagnostics across reversed import order, duplicate imports, and separately
-  executed cycle-bearing subgraphs).
+- `npm test` — 34 tests across `src/domain/impact.spec.ts` (split, merge,
+  cycles, missing succession, same-day versions, as-of effectiveness
+  derivation, determinism, large-graph path dedup/sort),
+  `src/domain/draft-2.spec.ts` (draft revision classification, shortest
+  witnesses and equal-length counts, stable diagnostics, reversed record
+  order), `test/app.e2e.spec.ts` (duplicate imports, malformed imports,
+  unknown versions, snapshot immutability under later imports, replay),
+  `test/draft-2.e2e.spec.ts` (byte-level identity across reversed import
+  order, duplicate imports, cycle-bearing subgraphs) and
+  `test/timeline.e2e.spec.ts` (four time points: draft period,
+  published-not-effective, effective, post-recording; graph-hash binding;
+  zero-drift replay of pre-recording diagnostics; same-day versions; cache
+  invalidation).
 - `npm run start:dev` — watch-mode server; smoke walkthrough above.
 
 Byte-level comparisons use canonical JSON (recursively sorted keys), the same

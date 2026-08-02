@@ -195,7 +195,18 @@ describe('computeImpact', () => {
     const published = computeImpact(graph, { ...QUERY, fromVersion: 'V-PUB', toVersion: 'V-PUB-2' });
     expect(published.versionContext.from.status).toBe('PUBLISHED');
     expect(published.versionContext.to.status).toBe('PUBLISHED');
+    // QUERY.asOf (2026-08-02) predates the shared 2027-01-01 effective date.
+    expect(published.versionContext.from.effectivenessAtAsOf).toBe('NOT_YET_EFFECTIVE');
+    expect(published.versionContext.to.effectivenessAtAsOf).toBe('NOT_YET_EFFECTIVE');
     expect(published.unchangedArticles).toEqual(['ART-A']);
+
+    const effective = computeImpact(graph, {
+      ...QUERY,
+      asOf: '2027-01-01T00:00:00.000Z',
+      fromVersion: 'V-PUB',
+      toVersion: 'V-PUB-2',
+    });
+    expect(effective.versionContext.to.effectivenessAtAsOf).toBe('EFFECTIVE');
 
     const draft = computeImpact(graph, { ...QUERY, fromVersion: 'V-PUB', toVersion: 'V-DRAFT' });
     expect(draft.versionContext.to.status).toBe('DRAFT');

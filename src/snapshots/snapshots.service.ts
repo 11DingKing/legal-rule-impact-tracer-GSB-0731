@@ -1,20 +1,26 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { canonicalStringify } from '../common/canonical-json';
-import { computeImpact } from '../domain/impact';
-import type { ImpactQuery, ImpactResult, RevisionGraph } from '../domain/types';
-import { SnapshotRepository, type SnapshotRecord } from '../persistence/snapshot.repository';
+import { Injectable, NotFoundException } from "@nestjs/common";
+import { canonicalStringify } from "../common/canonical-json";
+import { computeImpact } from "../domain/impact";
+import type { ImpactQuery, ImpactResult, RevisionGraph } from "../domain/types";
+import {
+  SnapshotRepository,
+  type SnapshotRecord,
+} from "../persistence/snapshot.repository";
 
 export interface SnapshotView {
   readonly id: string;
   readonly createdAt: string;
   readonly query: ImpactQuery;
+  readonly graphHash: string;
   readonly result: ImpactResult;
-  readonly traversedEdges: ImpactResult['traversedEdges'];
+  readonly traversedEdges: ImpactResult["traversedEdges"];
 }
 
 export interface ReplayResult {
   readonly snapshotId: string;
   readonly replayedAt: string;
+  /** Hash of the graph slice frozen into the snapshot. */
+  readonly graphHash: string;
   /** True when recomputation from the frozen graph reproduces the stored result. */
   readonly matchesStored: boolean;
   readonly result: ImpactResult;
@@ -35,6 +41,7 @@ export class SnapshotsService {
       id: record.id,
       createdAt: record.createdAt,
       query: parseJson(record.queryJson) as ImpactQuery,
+      graphHash: record.graphHash,
       result,
       traversedEdges: result.traversedEdges,
     };
@@ -56,6 +63,7 @@ export class SnapshotsService {
     return {
       snapshotId: record.id,
       replayedAt: new Date().toISOString(),
+      graphHash: record.graphHash,
       matchesStored,
       result: matchesStored ? recomputed : stored,
     };

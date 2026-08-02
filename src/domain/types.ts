@@ -4,23 +4,23 @@
  * This module is persistence- and transport-agnostic: no NestJS, no SQLite.
  */
 
-export type VersionStatus = "DRAFT" | "PUBLISHED" | "EFFECTIVE";
+export type VersionStatus = 'DRAFT' | 'PUBLISHED' | 'EFFECTIVE';
 
 export const VERSION_STATUSES: readonly VersionStatus[] = [
-  "DRAFT",
-  "PUBLISHED",
-  "EFFECTIVE",
+  'DRAFT',
+  'PUBLISHED',
+  'EFFECTIVE',
 ] as const;
 
-export type SuccessionKind = "RENUMBER" | "SPLIT" | "MERGE";
+export type SuccessionKind = 'RENUMBER' | 'SPLIT' | 'MERGE';
 
 export const SUCCESSION_KINDS: readonly SuccessionKind[] = [
-  "RENUMBER",
-  "SPLIT",
-  "MERGE",
+  'RENUMBER',
+  'SPLIT',
+  'MERGE',
 ] as const;
 
-export type ImpactLevel = "DIRECT" | "INDIRECT" | "UNAFFECTED";
+export type ImpactLevel = 'DIRECT' | 'INDIRECT' | 'UNAFFECTED';
 
 export interface LawVersion {
   readonly id: string;
@@ -74,7 +74,7 @@ export interface ImpactQuery {
   readonly asOf: string;
 }
 
-export type ChangeReason = "SUCCESSION";
+export type ChangeReason = 'SUCCESSION';
 
 export interface ChangedArticle {
   readonly stableId: string;
@@ -96,7 +96,7 @@ export interface MissingSuccessionEntry {
   readonly boundRuleIds: readonly string[];
 }
 
-export type PathEdgeKind = "SUCCESSION" | "REFERENCE_REVERSE";
+export type PathEdgeKind = 'SUCCESSION' | 'REFERENCE_REVERSE';
 
 export interface PathEdge {
   readonly fromId: string;
@@ -111,7 +111,7 @@ export interface PathEdge {
  */
 export interface PropagationPath {
   readonly ruleId: string;
-  readonly impact: Exclude<ImpactLevel, "UNAFFECTED">;
+  readonly impact: Exclude<ImpactLevel, 'UNAFFECTED'>;
   readonly nodes: readonly string[];
   readonly edges: readonly PathEdge[];
 }
@@ -134,7 +134,7 @@ export interface RuleImpact {
   readonly witnessCount: number;
 }
 
-export type DiagnosticCode = "MISSING_SUCCESSION";
+export type DiagnosticCode = 'MISSING_SUCCESSION';
 
 /**
  * Stable diagnostic: deterministic code, subject, affected rules and message.
@@ -147,10 +147,18 @@ export interface Diagnostic {
   readonly message: string;
 }
 
+/**
+ * Effectiveness of a version at the query's asOf moment. Derived, never
+ * stored: DRAFT stays DRAFT; a PUBLISHED version is NOT_YET_EFFECTIVE until
+ * its effectiveFrom date is reached by asOf; EFFECTIVE stays EFFECTIVE.
+ */
+export type EffectivenessAtAsOf = 'DRAFT' | 'NOT_YET_EFFECTIVE' | 'EFFECTIVE';
+
 export interface VersionContextEntry {
   readonly id: string;
   readonly status: VersionStatus;
   readonly effectiveFrom: string | null;
+  readonly effectivenessAtAsOf: EffectivenessAtAsOf;
 }
 
 export interface ImpactResult {

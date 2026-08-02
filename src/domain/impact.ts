@@ -10,6 +10,7 @@ import {
 import type {
   ChangedArticle,
   Diagnostic,
+  EffectivenessAtAsOf,
   ImpactQuery,
   ImpactResult,
   LawVersion,
@@ -18,6 +19,7 @@ import type {
   RevisionGraph,
   RuleImpact,
   SuccessionEdge,
+  VersionContextEntry,
 } from "./types";
 
 export class UnknownVersionError extends Error {
@@ -76,6 +78,41 @@ function dedupePathEdges(edges: readonly PathEdge[]): PathEdge[] {
     }
   }
   return unique;
+}
+
+/**
+ * Derive a version's effectiveness at the query's asOf moment. Pure:
+ * DRAFT stays DRAFT; EFFECTIVE stays EFFECTIVE; a PUBLISHED version becomes
+ * EFFECTIVE once asOf reaches its effectiveFrom calendar date (ISO strings
+ * compare lexicographically). Draft and published-not-effective queries
+ * thereby remain distinct from effective ones at identical graph content.
+ */
+export function deriveEffectiveness(
+  version: LawVersion,
+  asOf: string,
+): EffectivenessAtAsOf {
+  if (version.status === "DRAFT") {
+    return "DRAFT";
+  }
+  if (version.status === "EFFECTIVE") {
+    return "EFFECTIVE";
+  }
+  const asOfDate = asOf.slice(0, 10);
+  return version.effectiveFrom !== null && version.effectiveFrom <= asOfDate
+    ? "EFFECTIVE"
+    : "NOT_YET_EFFECTIVE";
+}
+
+function toContextEntry(
+  version: LawVersion,
+  asOf: string,
+): VersionContextEntry {
+  return {
+    id: version.id,
+    status: version.status,
+    effectiveFrom: version.effectiveFrom,
+    effectivenessAtAsOf: deriveEffectiveness(version, asOf),
+  };
 }
 
 /**
@@ -343,16 +380,8 @@ export function computeImpact(
   return {
     query,
     versionContext: {
-      from: {
-        id: fromVersion.id,
-        status: fromVersion.status,
-        effectiveFrom: fromVersion.effectiveFrom,
-      },
-      to: {
-        id: toVersion.id,
-        status: toVersion.status,
-        effectiveFrom: toVersion.effectiveFrom,
-      },
+      from: toContextEntry(fromVersion, query.asOf),
+      to: toContextEntry(toVersion, query.asOf),
     },
     changedArticles,
     missingSuccession,

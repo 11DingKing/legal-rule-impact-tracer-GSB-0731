@@ -1,0 +1,27 @@
+{
+  "versions": [
+    {"id": "LAW-V1", "status": "EFFECTIVE", "effectiveFrom": "2026-01-01"},
+    {"id": "LAW-DRAFT-2", "status": "DRAFT", "effectiveFrom": null},
+    {"id": "LAW-V2", "status": "PUBLISHED", "effectiveFrom": "2027-07-01"},
+    {"id": "LAW-V2-HOTFIX", "status": "PUBLISHED", "effectiveFrom": "2027-07-01"}
+  ],
+  "articles": [
+    {"stableId": "ART-A1", "version": "LAW-V2", "label": "第十二条", "references": ["ART-A2"]},
+    {"stableId": "ART-N", "version": "LAW-V1", "label": "第九十五条", "references": ["ART-GONE"]},
+    {"stableId": "ART-N", "version": "LAW-DRAFT-2", "label": "第九十五条"},
+    {"stableId": "ART-G1", "version": "LAW-DRAFT-2", "label": "第九十条"},
+    {"stableId": "ART-A1", "version": "LAW-V2-HOTFIX", "label": "第十二条"}
+  ],
+  "succession": [
+    {"from": "ART-GONE", "to": ["ART-G1"], "kind": "RENUMBER"}
+  ],
+  "bindings": [
+    {"ruleId": "RULE-N", "articleIds": ["ART-N"]}
+  ],
+  "notes": [
+    "LAW-V2 effectiveFrom moves from 2027-01-01 to 2027-07-01 (effective-date change); LAW-V2-HOTFIX shares the same effective day (same-day versions).",
+    "ART-A1 gains a cross-reference to ART-A2 inside LAW-V2.",
+    "The ART-GONE -> ART-G1 edge is recorded AFTER earlier queries ran: it is the retroactively recorded succession edge. It must only affect snapshots created after its import.",
+    "ART-N cites ART-GONE, so the retroactive edge creates new indirect impact for RULE-N."
+  ]
+}

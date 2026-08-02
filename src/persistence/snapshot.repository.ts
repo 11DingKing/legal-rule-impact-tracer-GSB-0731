@@ -7,6 +7,8 @@ export interface SnapshotRecord {
   readonly queryJson: string;
   readonly graphJson: string;
   readonly resultJson: string;
+  /** SHA-256 over the canonical frozen graph; binds the snapshot to its input. */
+  readonly graphHash: string;
 }
 
 interface SnapshotRow {
@@ -15,6 +17,7 @@ interface SnapshotRow {
   query_json: string;
   graph_json: string;
   result_json: string;
+  graph_hash: string;
 }
 
 function toRecord(row: SnapshotRow): SnapshotRecord {
@@ -24,6 +27,7 @@ function toRecord(row: SnapshotRow): SnapshotRecord {
     queryJson: row.query_json,
     graphJson: row.graph_json,
     resultJson: row.result_json,
+    graphHash: row.graph_hash,
   };
 }
 
@@ -39,8 +43,8 @@ export class SnapshotRepository {
     this.database
       .connection()
       .prepare(
-        `INSERT INTO snapshots (id, created_at, query_json, graph_json, result_json)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO snapshots (id, created_at, query_json, graph_json, result_json, graph_hash)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -48,6 +52,7 @@ export class SnapshotRepository {
         record.queryJson,
         record.graphJson,
         record.resultJson,
+        record.graphHash,
       );
   }
 
@@ -55,7 +60,8 @@ export class SnapshotRepository {
     const row = this.database
       .connection()
       .prepare(
-        "SELECT id, created_at, query_json, graph_json, result_json FROM snapshots WHERE id = ?",
+        `SELECT id, created_at, query_json, graph_json, result_json, graph_hash
+         FROM snapshots WHERE id = ?`,
       )
       .get(id) as unknown as SnapshotRow | undefined;
     return row === undefined ? null : toRecord(row);
@@ -65,7 +71,8 @@ export class SnapshotRepository {
     const rows = this.database
       .connection()
       .prepare(
-        "SELECT id, created_at, query_json, graph_json, result_json FROM snapshots ORDER BY created_at, id",
+        `SELECT id, created_at, query_json, graph_json, result_json, graph_hash
+         FROM snapshots ORDER BY created_at, id`,
       )
       .all() as unknown as SnapshotRow[];
     return rows.map(toRecord);
