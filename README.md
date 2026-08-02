@@ -30,20 +30,24 @@ src/
     impact.ts        computeImpact(): the single reasoning entry point
     impact.spec.ts   Split / merge / cycle / missing-edge / determinism tests
     draft-2.spec.ts  End-to-end test over the bundled materials
+    draft-2-shared-node.spec.ts  Shared-node (split+merge on one ID) scenario
   common/
     canonical-json.ts  Sorted-key JSON for stable hashing + snapshot replay
   persistence/       SQLite adapters only (schema, upsert, read; no rules)
     database.service.ts   Connection + schema + transaction helper
     graph.repository.ts   Idempotent upsert / sorted reload of the graph
+    graph.repository.spec.ts  Re-import idempotency yields identical results
     import.repository.ts  Import-batch dedup by content hash
     snapshot.repository.ts  Append-only snapshot store (INSERT + SELECT only)
   imports/           Import parsing/validation + HTTP boundary
   impact/            Impact query service + HTTP boundary
   snapshots/         Snapshot read + immutable replay + HTTP boundary
 materials/
-  revision-graph.json     LAW-V1 → LAW-V2 sample (a SPLIT)
-  draft-2-revision.json   LAW-V1 → LAW-DRAFT-2: split, merge, cycle,
-                          missing edge, indirect and unaffected rules
+  revision-graph.json      LAW-V1 → LAW-V2 sample (a SPLIT)
+  draft-2-revision.json    LAW-V1 → LAW-DRAFT-2: split, merge, cycle,
+                           missing edge, indirect and unaffected rules
+  draft-2-shared-node.json LAW-V1 → LAW-DRAFT-2 where one stable ID (ART-HUB)
+                           is BOTH a split source and a merge source
 ```
 
 The layering is enforced by dependency direction: `domain` imports nothing from
@@ -194,7 +198,7 @@ curl localhost:3000/snapshots/<snapshotId>/replay
 
 ## Testing
 
-`npm test` runs two suites:
+`npm test` runs four suites:
 
 - [`impact.spec.ts`](src/domain/impact.spec.ts) — the split, many-to-one merge,
   cross-reference cycle, identical-label missing-succession, same-day
@@ -203,4 +207,43 @@ curl localhost:3000/snapshots/<snapshotId>/replay
 - [`draft-2.spec.ts`](src/domain/draft-2.spec.ts) — an end-to-end pass over the
   bundled materials asserting the full classification, witnesses, diagnostics,
   and byte-identical output under reversed import order.
-```
+- [`draft-2-shared-node.spec.ts`](src/domain/draft-2-shared-node.spec.ts) — the
+  shared-node scenario below.
+- [`graph.repository.spec.ts`](src/persistence/graph.repository.spec.ts) —
+  proves through the real SQLite adapter that a repeated (and reversed-order)
+  import reloads to the same graph and yields a byte-identical result.
+
+### Shared-node scenario (one stable ID, split *and* merge)
+
+[`draft-2-shared-node.json`](materials/draft-2-shared-node.json) models a
+LAW-DRAFT-2 draft in which the **same** stable article ID, `ART-HUB`, is
+simultaneously:
+
+- a **one-to-many SPLIT** source (`ART-HUB → {ART-HUB-A, ART-HUB-B}`), and
+- one of **two MERGE sources** (`ART-HUB, ART-PART → ART-COMBINED`).
+
+Because succession edges are grouped by their `fromId` regardless of kind,
+`ART-HUB` surfaces as a *single* changed article listing all three explicit
+edges in stable order — the split and the merge coexist without special-casing.
+The scenario also includes a cross-reference cycle (`ART-C1 ↔ ART-C2`) and one
+deliberately missing succession edge (`ART-DROP`).
+
+The reasoning is unchanged from round 1 (same relationship kinds, stable
+ordering, pure domain evaluator). The result:
+
+- **Direct**: `RULE-CYCLE-1`, `RULE-CYCLE-2`, `RULE-HUB`, `RULE-MERGE-BOTH`.
+  `RULE-MERGE-BOTH` is bound to both merge sources, so it keeps one shortest
+  witness (`[ART-HUB]`) and a `witnessCount` of 2.
+- **Indirect**: `RULE-CITE` (witnessCount 1), `RULE-CITE2` (cites both cycle
+  nodes, witnessCount 2).
+- **Unaffected**: `RULE-DROP`, `RULE-SAFE`.
+- **Missing succession**: exactly `ART-DROP` — reported as a stable
+  `MISSING_SUCCESSION` diagnostic, never inferred from labels or text.
+
+The suite asserts **byte-identical** results, paths, and diagnostics across
+three transformations of the input — reversed record order, a duplicated
+(twice-imported) document, and an isolated cycle subgraph — via
+`canonicalStringify`. To make duplicate imports collapse at the pure-domain
+level too (not only via the SQLite primary keys), `sortSuccessionEdges`
+deduplicates identical edges before sorting.
+

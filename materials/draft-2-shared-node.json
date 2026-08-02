@@ -1,0 +1,42 @@
+{
+  "versions": [
+    {"id": "LAW-V1", "status": "EFFECTIVE", "effectiveFrom": "2026-01-01"},
+    {"id": "LAW-DRAFT-2", "status": "DRAFT", "effectiveFrom": null}
+  ],
+  "articles": [
+    {"stableId": "ART-HUB", "version": "LAW-V1", "label": "第三十条"},
+    {"stableId": "ART-PART", "version": "LAW-V1", "label": "第三十一条"},
+    {"stableId": "ART-C1", "version": "LAW-V1", "label": "第三十二条", "references": ["ART-C2"]},
+    {"stableId": "ART-C2", "version": "LAW-V1", "label": "第三十三条", "references": ["ART-C1"]},
+    {"stableId": "ART-CITE", "version": "LAW-V1", "label": "第三十四条", "references": ["ART-C1"]},
+    {"stableId": "ART-CITE2", "version": "LAW-V1", "label": "第三十五条", "references": ["ART-C1", "ART-C2"]},
+    {"stableId": "ART-SAFE", "version": "LAW-V1", "label": "第三十六条"},
+    {"stableId": "ART-DROP", "version": "LAW-V1", "label": "第三十七条"},
+
+    {"stableId": "ART-HUB-A", "version": "LAW-DRAFT-2", "label": "第三十条之一"},
+    {"stableId": "ART-HUB-B", "version": "LAW-DRAFT-2", "label": "第三十条之二"},
+    {"stableId": "ART-COMBINED", "version": "LAW-DRAFT-2", "label": "第三十一条"},
+    {"stableId": "ART-C1N", "version": "LAW-DRAFT-2", "label": "第三十二条"},
+    {"stableId": "ART-C2N", "version": "LAW-DRAFT-2", "label": "第三十三条"},
+    {"stableId": "ART-CITE", "version": "LAW-DRAFT-2", "label": "第三十四条"},
+    {"stableId": "ART-CITE2", "version": "LAW-DRAFT-2", "label": "第三十五条"},
+    {"stableId": "ART-SAFE", "version": "LAW-DRAFT-2", "label": "第三十六条"}
+  ],
+  "succession": [
+    {"from": "ART-HUB", "to": ["ART-HUB-A", "ART-HUB-B"], "kind": "SPLIT"},
+    {"from": "ART-HUB", "to": ["ART-COMBINED"], "kind": "MERGE"},
+    {"from": "ART-PART", "to": ["ART-COMBINED"], "kind": "MERGE"},
+    {"from": "ART-C1", "to": ["ART-C1N"], "kind": "RENUMBER"},
+    {"from": "ART-C2", "to": ["ART-C2N"], "kind": "RENUMBER"}
+  ],
+  "bindings": [
+    {"ruleId": "RULE-HUB", "articleIds": ["ART-HUB"]},
+    {"ruleId": "RULE-MERGE-BOTH", "articleIds": ["ART-HUB", "ART-PART"]},
+    {"ruleId": "RULE-CYCLE-1", "articleIds": ["ART-C1"]},
+    {"ruleId": "RULE-CYCLE-2", "articleIds": ["ART-C2"]},
+    {"ruleId": "RULE-CITE", "articleIds": ["ART-CITE"]},
+    {"ruleId": "RULE-CITE2", "articleIds": ["ART-CITE2"]},
+    {"ruleId": "RULE-SAFE", "articleIds": ["ART-SAFE"]},
+    {"ruleId": "RULE-DROP", "articleIds": ["ART-DROP"]}
+  ]
+}

@@ -51,9 +51,22 @@ function requireVersion(graph: RevisionGraph, versionId: string): LawVersion {
   return version;
 }
 
-/** Sort succession edges so a changed article lists its targets stably. */
+/**
+ * Sort succession edges so a changed article lists its targets stably, and
+ * deduplicate identical edges. Dedup keeps the result byte-identical whether a
+ * document is imported once or repeatedly (duplicate input records collapse).
+ */
 function sortSuccessionEdges(edges: readonly SuccessionEdge[]): SuccessionEdge[] {
-  return [...edges].sort(
+  const seen = new Set<string>();
+  const unique: SuccessionEdge[] = [];
+  for (const edge of edges) {
+    const key = `${edge.fromId}\u0000${edge.toId}\u0000${edge.kind}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(edge);
+    }
+  }
+  return unique.sort(
     (a, b) =>
       compareIds(a.fromId, b.fromId) ||
       compareIds(a.toId, b.toId) ||
