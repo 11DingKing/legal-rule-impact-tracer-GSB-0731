@@ -1,0 +1,55 @@
+{
+  "versions": [
+    {"id": "LAW-V1", "status": "EFFECTIVE", "effectiveFrom": "2026-01-01"},
+    {"id": "LAW-DRAFT-2", "status": "DRAFT", "effectiveFrom": null},
+    {"id": "LAW-V2", "status": "PUBLISHED", "effectiveFrom": "2027-01-01"},
+    {"id": "LAW-V2-ALT", "status": "PUBLISHED", "effectiveFrom": "2027-01-01"}
+  ],
+  "articles": [
+    {"stableId": "ART-A", "version": "LAW-V1", "label": "第十条"},
+    {"stableId": "ART-B", "version": "LAW-V1", "label": "第十一条", "references": ["ART-A"]},
+    {"stableId": "ART-C1", "version": "LAW-V1", "label": "第十二条", "references": ["ART-C2"]},
+    {"stableId": "ART-C2", "version": "LAW-V1", "label": "第十三条", "references": ["ART-C1"]},
+    {"stableId": "ART-CITE", "version": "LAW-V1", "label": "第十四条", "references": ["ART-C1"]},
+    {"stableId": "ART-ORPH", "version": "LAW-V1", "label": "第十五条"},
+    {"stableId": "ART-KEEP", "version": "LAW-V1", "label": "第十六条"},
+
+    {"stableId": "ART-A2", "version": "LAW-DRAFT-2", "label": "第十条草案"},
+    {"stableId": "ART-B", "version": "LAW-DRAFT-2", "label": "第十一条"},
+    {"stableId": "ART-C1N", "version": "LAW-DRAFT-2", "label": "第十二条"},
+    {"stableId": "ART-C2N", "version": "LAW-DRAFT-2", "label": "第十三条"},
+    {"stableId": "ART-CITE", "version": "LAW-DRAFT-2", "label": "第十四条"},
+    {"stableId": "ART-ORPH2", "version": "LAW-DRAFT-2", "label": "第十五条草案"},
+    {"stableId": "ART-KEEP", "version": "LAW-DRAFT-2", "label": "第十六条"},
+
+    {"stableId": "ART-A2", "version": "LAW-V2", "label": "第十条"},
+    {"stableId": "ART-B", "version": "LAW-V2", "label": "第十一条"},
+    {"stableId": "ART-C1N", "version": "LAW-V2", "label": "第十二条"},
+    {"stableId": "ART-C2N", "version": "LAW-V2", "label": "第十三条"},
+    {"stableId": "ART-CITE", "version": "LAW-V2", "label": "第十四条"},
+    {"stableId": "ART-ORPH2", "version": "LAW-V2", "label": "第十五条"},
+    {"stableId": "ART-KEEP", "version": "LAW-V2", "label": "第十六条"},
+
+    {"stableId": "ART-A2", "version": "LAW-V2-ALT", "label": "第十条"},
+    {"stableId": "ART-B", "version": "LAW-V2-ALT", "label": "第十一条"},
+    {"stableId": "ART-C1N", "version": "LAW-V2-ALT", "label": "第十二条"},
+    {"stableId": "ART-C2N", "version": "LAW-V2-ALT", "label": "第十三条"},
+    {"stableId": "ART-CITE", "version": "LAW-V2-ALT", "label": "第十四条"},
+    {"stableId": "ART-ORPH2", "version": "LAW-V2-ALT", "label": "第十五条"},
+    {"stableId": "ART-KEEP", "version": "LAW-V2-ALT", "label": "第十六条"}
+  ],
+  "succession": [
+    {"from": "ART-A", "to": ["ART-A2"], "kind": "RENUMBER"},
+    {"from": "ART-C1", "to": ["ART-C1N"], "kind": "RENUMBER"},
+    {"from": "ART-C2", "to": ["ART-C2N"], "kind": "RENUMBER"}
+  ],
+  "bindings": [
+    {"ruleId": "RULE-A", "articleIds": ["ART-A"]},
+    {"ruleId": "RULE-B", "articleIds": ["ART-B"]},
+    {"ruleId": "RULE-CYCLE-1", "articleIds": ["ART-C1"]},
+    {"ruleId": "RULE-CYCLE-2", "articleIds": ["ART-C2"]},
+    {"ruleId": "RULE-CITE", "articleIds": ["ART-CITE"]},
+    {"ruleId": "RULE-ORPH", "articleIds": ["ART-ORPH"]},
+    {"ruleId": "RULE-KEEP", "articleIds": ["ART-KEEP"]}
+  ]
+}

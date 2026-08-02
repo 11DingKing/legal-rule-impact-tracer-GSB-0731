@@ -41,6 +41,7 @@ src/
     snapshot.repository.ts  Append-only snapshot store (INSERT + SELECT only)
   imports/           Import parsing/validation + HTTP boundary
   impact/            Impact query service + HTTP boundary
+    lifecycle.spec.ts  Four-instant lifecycle + post-hoc backfill, no drift
   snapshots/         Snapshot read + immutable replay + HTTP boundary
 materials/
   revision-graph.json      LAW-V1 → LAW-V2 sample (a SPLIT)
@@ -48,6 +49,9 @@ materials/
                            missing edge, indirect and unaffected rules
   draft-2-shared-node.json LAW-V1 → LAW-DRAFT-2 where one stable ID (ART-HUB)
                            is BOTH a split source and a merge source
+  lifecycle-revision.json  LAW-V1 → LAW-V2 with cross-refs, a cycle, same-day
+                           versions, effective dates, one missing edge
+  lifecycle-backfill.json  The post-hoc succession edge added after the fact
 ```
 
 The layering is enforced by dependency direction: `domain` imports nothing from
@@ -157,6 +161,33 @@ previously-missing succession edge, a new query reclassifies the affected rule,
 yet the old snapshot still replays its original result with `matchesStored:
 true`.
 
+### Time-aware lifecycle & post-hoc backfill
+
+A revision moves through distinct instants, and a query at each instant binds
+four things into its snapshot: the **law versions** (`fromVersion`,
+`toVersion`), the **query instant** (`asOf`), the **graph-snapshot hash**, and
+the **traversed propagation edges**. [`lifecycle-revision.json`](materials/lifecycle-revision.json)
+plus the post-hoc [`lifecycle-backfill.json`](materials/lifecycle-backfill.json)
+model the full arc (`LAW-V1 → LAW-V2`):
+
+| Instant (`asOf`)         | `to` effectiveness   | `ART-ORPH` succession | `RULE-ORPH` |
+| ------------------------ | -------------------- | --------------------- | ----------- |
+| draft period             | `NOT_YET_EFFECTIVE`  | missing (diagnostic)  | unaffected  |
+| published, not effective | `NOT_YET_EFFECTIVE`  | missing (diagnostic)  | unaffected  |
+| effective                | `EFFECTIVE`          | missing (diagnostic)  | unaffected  |
+| after backfill           | `EFFECTIVE`          | present               | **direct**  |
+
+The `effectivenessAtAsOf` derivation (`DRAFT` / `NOT_YET_EFFECTIVE` /
+`EFFECTIVE`) is what separates the first three instants even though the derived
+impact set is identical; only the version context differs.
+
+**The backfill affects only new snapshots.** Adding the previously-missing
+`ART-ORPH → ART-ORPH2` edge invalidates the graph cache and moves the live
+graph hash forward, so a fresh query reclassifies `RULE-ORPH` as direct. But
+each earlier snapshot replays byte-identically from its *own* frozen graph —
+the missing-edge diagnostic and pre-backfill result do not drift. This is
+covered end-to-end in [`lifecycle.spec.ts`](src/impact/lifecycle.spec.ts).
+
 ## HTTP API
 
 | Method & path                | Purpose                                            | Notes |
@@ -198,7 +229,7 @@ curl localhost:3000/snapshots/<snapshotId>/replay
 
 ## Testing
 
-`npm test` runs four suites:
+`npm test` runs the domain, persistence, and lifecycle suites:
 
 - [`impact.spec.ts`](src/domain/impact.spec.ts) — the split, many-to-one merge,
   cross-reference cycle, identical-label missing-succession, same-day
@@ -211,7 +242,13 @@ curl localhost:3000/snapshots/<snapshotId>/replay
   shared-node scenario below.
 - [`graph.repository.spec.ts`](src/persistence/graph.repository.spec.ts) —
   proves through the real SQLite adapter that a repeated (and reversed-order)
-  import reloads to the same graph and yields a byte-identical result.
+  import reloads to the same graph and yields a byte-identical result, and that
+  the graph cache is invalidated on the next upsert.
+- [`lifecycle.spec.ts`](src/impact/lifecycle.spec.ts) — wires the real
+  import/impact/snapshot services over in-memory SQLite to walk the four
+  lifecycle instants, bind version/instant/hash/edges into each snapshot, and
+  prove a post-hoc backfill leaves earlier snapshots drift-free; also covers
+  same-day version distinctness and cross-reference cycle termination.
 
 ### Shared-node scenario (one stable ID, split *and* merge)
 

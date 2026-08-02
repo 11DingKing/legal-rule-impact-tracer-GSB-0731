@@ -1,0 +1,11 @@
+{
+  "versions": [
+    {"id": "LAW-V1", "status": "EFFECTIVE", "effectiveFrom": "2026-01-01"},
+    {"id": "LAW-V2", "status": "PUBLISHED", "effectiveFrom": "2027-01-01"}
+  ],
+  "articles": [],
+  "succession": [
+    {"from": "ART-ORPH", "to": ["ART-ORPH2"], "kind": "RENUMBER"}
+  ],
+  "bindings": []
+}

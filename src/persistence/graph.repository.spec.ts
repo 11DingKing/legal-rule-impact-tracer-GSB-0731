@@ -77,4 +77,37 @@ describe('GraphRepository idempotent re-import (shared-node material)', () => {
       canonicalStringify(forwardResult),
     );
   });
+
+  it('returns the same cached graph instance until an upsert invalidates it', () => {
+    const repo = freshRepository();
+    repo.graph.upsertGraph(material);
+
+    const first = repo.graph.loadGraph();
+    const second = repo.graph.loadGraph();
+    // Cache hit: repeated reads without a write return the identical instance.
+    expect(second).toBe(first);
+
+    // A later import (e.g. a backfilled edge) must invalidate the cache so the
+    // next read reflects the new rows rather than a stale snapshot.
+    repo.graph.upsertGraph({
+      versions: [],
+      articles: [],
+      references: [],
+      succession: [{ fromId: 'ART-ORPH', toId: 'ART-ORPH2', kind: 'RENUMBER' }],
+      bindings: [],
+    });
+    const third = repo.graph.loadGraph();
+    expect(third).not.toBe(first);
+    expect(first.succession).not.toContainEqual({
+      fromId: 'ART-ORPH',
+      toId: 'ART-ORPH2',
+      kind: 'RENUMBER',
+    });
+    expect(third.succession).toContainEqual({
+      fromId: 'ART-ORPH',
+      toId: 'ART-ORPH2',
+      kind: 'RENUMBER',
+    });
+    repo.database.onModuleDestroy();
+  });
 });
