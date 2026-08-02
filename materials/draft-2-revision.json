@@ -1,0 +1,43 @@
+{
+  "versions": [
+    {"id": "LAW-V1", "status": "EFFECTIVE", "effectiveFrom": "2026-01-01"},
+    {"id": "LAW-DRAFT-2", "status": "DRAFT", "effectiveFrom": null}
+  ],
+  "articles": [
+    {"stableId": "ART-S", "version": "LAW-V1", "label": "第三十条", "references": ["ART-A"]},
+    {"stableId": "ART-M1", "version": "LAW-V1", "label": "第四十条"},
+    {"stableId": "ART-M2", "version": "LAW-V1", "label": "第四十一条"},
+    {"stableId": "ART-C1", "version": "LAW-V1", "label": "第六十条", "references": ["ART-C2"]},
+    {"stableId": "ART-C2", "version": "LAW-V1", "label": "第六十一条", "references": ["ART-C1"]},
+    {"stableId": "ART-OBS", "version": "LAW-V1", "label": "第七十条", "references": ["ART-C1", "ART-C2"]},
+    {"stableId": "ART-KEEP", "version": "LAW-V1", "label": "第八十条"},
+    {"stableId": "ART-GONE", "version": "LAW-V1", "label": "第九十条"},
+    {"stableId": "ART-S1", "version": "LAW-DRAFT-2", "label": "第三十条第一款"},
+    {"stableId": "ART-S2", "version": "LAW-DRAFT-2", "label": "第三十条第二款"},
+    {"stableId": "ART-C1-D", "version": "LAW-DRAFT-2", "label": "第六十条"},
+    {"stableId": "ART-C2-D", "version": "LAW-DRAFT-2", "label": "第六十一条"},
+    {"stableId": "ART-OBS", "version": "LAW-DRAFT-2", "label": "第七十条"},
+    {"stableId": "ART-KEEP", "version": "LAW-DRAFT-2", "label": "第八十条"}
+  ],
+  "succession": [
+    {"from": "ART-S", "to": ["ART-S1", "ART-S2"], "kind": "SPLIT"},
+    {"from": "ART-M1", "to": ["ART-S"], "kind": "MERGE"},
+    {"from": "ART-M2", "to": ["ART-S"], "kind": "MERGE"},
+    {"from": "ART-C1", "to": ["ART-C1-D"], "kind": "RENUMBER"},
+    {"from": "ART-C2", "to": ["ART-C2-D"], "kind": "RENUMBER"}
+  ],
+  "bindings": [
+    {"ruleId": "RULE-DRAFT-SPLIT", "articleIds": ["ART-S"]},
+    {"ruleId": "RULE-DRAFT-MERGE-BOTH", "articleIds": ["ART-M1", "ART-M2"]},
+    {"ruleId": "RULE-DRAFT-CYCLE-1", "articleIds": ["ART-C1"]},
+    {"ruleId": "RULE-DRAFT-CYCLE-2", "articleIds": ["ART-C2"]},
+    {"ruleId": "RULE-DRAFT-OBS", "articleIds": ["ART-OBS"]},
+    {"ruleId": "RULE-DRAFT-SAFE", "articleIds": ["ART-KEEP"]},
+    {"ruleId": "RULE-DRAFT-GONE", "articleIds": ["ART-GONE"]}
+  ],
+  "notes": [
+    "ART-S appears in a one-to-many split (as source) and in a two-to-one merge (as target of ART-M1 + ART-M2): the same stableArticleId participates in both relation kinds.",
+    "ART-GONE deliberately declares no succession edge and is not carried into LAW-DRAFT-2: it must surface as a MISSING_SUCCESSION diagnostic, never guessed.",
+    "ART-C1 <-> ART-C2 form a cross-reference cycle; ART-OBS cites both, yielding two equal-length shortest witnesses."
+  ]
+}

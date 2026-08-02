@@ -4,23 +4,23 @@
  * This module is persistence- and transport-agnostic: no NestJS, no SQLite.
  */
 
-export type VersionStatus = 'DRAFT' | 'PUBLISHED' | 'EFFECTIVE';
+export type VersionStatus = "DRAFT" | "PUBLISHED" | "EFFECTIVE";
 
 export const VERSION_STATUSES: readonly VersionStatus[] = [
-  'DRAFT',
-  'PUBLISHED',
-  'EFFECTIVE',
+  "DRAFT",
+  "PUBLISHED",
+  "EFFECTIVE",
 ] as const;
 
-export type SuccessionKind = 'RENUMBER' | 'SPLIT' | 'MERGE';
+export type SuccessionKind = "RENUMBER" | "SPLIT" | "MERGE";
 
 export const SUCCESSION_KINDS: readonly SuccessionKind[] = [
-  'RENUMBER',
-  'SPLIT',
-  'MERGE',
+  "RENUMBER",
+  "SPLIT",
+  "MERGE",
 ] as const;
 
-export type ImpactLevel = 'DIRECT' | 'INDIRECT' | 'UNAFFECTED';
+export type ImpactLevel = "DIRECT" | "INDIRECT" | "UNAFFECTED";
 
 export interface LawVersion {
   readonly id: string;
@@ -74,7 +74,7 @@ export interface ImpactQuery {
   readonly asOf: string;
 }
 
-export type ChangeReason = 'SUCCESSION';
+export type ChangeReason = "SUCCESSION";
 
 export interface ChangedArticle {
   readonly stableId: string;
@@ -96,7 +96,7 @@ export interface MissingSuccessionEntry {
   readonly boundRuleIds: readonly string[];
 }
 
-export type PathEdgeKind = 'SUCCESSION' | 'REFERENCE_REVERSE';
+export type PathEdgeKind = "SUCCESSION" | "REFERENCE_REVERSE";
 
 export interface PathEdge {
   readonly fromId: string;
@@ -111,7 +111,7 @@ export interface PathEdge {
  */
 export interface PropagationPath {
   readonly ruleId: string;
-  readonly impact: Exclude<ImpactLevel, 'UNAFFECTED'>;
+  readonly impact: Exclude<ImpactLevel, "UNAFFECTED">;
   readonly nodes: readonly string[];
   readonly edges: readonly PathEdge[];
 }
@@ -121,6 +121,30 @@ export interface RuleImpact {
   readonly level: ImpactLevel;
   /** Bound articles through which the impact reaches the rule; empty for UNAFFECTED. */
   readonly via: readonly string[];
+  /**
+   * One shortest propagation witness for an affected rule, chosen
+   * deterministically as the lexicographically smallest node sequence among
+   * the shortest complete paths. Null for UNAFFECTED rules.
+   */
+  readonly witness: PropagationPath | null;
+  /**
+   * Number of distinct witnesses whose length equals the shortest witness
+   * length (all equal-length witnesses). Zero for UNAFFECTED rules.
+   */
+  readonly witnessCount: number;
+}
+
+export type DiagnosticCode = "MISSING_SUCCESSION";
+
+/**
+ * Stable diagnostic: deterministic code, subject, affected rules and message.
+ * Diagnostics report data gaps; they never carry guessed identities.
+ */
+export interface Diagnostic {
+  readonly code: DiagnosticCode;
+  readonly stableId: string;
+  readonly boundRuleIds: readonly string[];
+  readonly message: string;
 }
 
 export interface VersionContextEntry {
@@ -147,6 +171,8 @@ export interface ImpactResult {
     readonly indirect: readonly RuleImpact[];
     readonly unaffected: readonly RuleImpact[];
   };
+  /** Stable, deterministically sorted diagnostics (missing succession edges). */
+  readonly diagnostics: readonly Diagnostic[];
   readonly paths: readonly PropagationPath[];
   /** Every edge the evaluation traversed, frozen for snapshot replay. */
   readonly traversedEdges: readonly PathEdge[];

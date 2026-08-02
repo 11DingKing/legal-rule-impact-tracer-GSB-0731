@@ -4,10 +4,12 @@ import {
   dedupeAndSortPaths,
   enumerateSimplePaths,
   nodesFromEdges,
+  pathKey,
   sortUnique,
 } from "./paths";
 import type {
   ChangedArticle,
+  Diagnostic,
   ImpactQuery,
   ImpactResult,
   LawVersion,
@@ -74,6 +76,32 @@ function dedupePathEdges(edges: readonly PathEdge[]): PathEdge[] {
     }
   }
   return unique;
+}
+
+/**
+ * Pick the shortest propagation witness for one rule from its complete,
+ * deduplicated path set: minimum edge count wins, ties are broken by the
+ * lexicographically smallest node sequence. `witnessCount` reports how many
+ * distinct witnesses share that minimal length.
+ */
+function selectWitness(rulePaths: readonly PropagationPath[]): {
+  witness: PropagationPath | null;
+  witnessCount: number;
+} {
+  let minLength = Number.POSITIVE_INFINITY;
+  for (const path of rulePaths) {
+    minLength = Math.min(minLength, path.edges.length);
+  }
+  if (!Number.isFinite(minLength)) {
+    return { witness: null, witnessCount: 0 };
+  }
+  const shortest = rulePaths
+    .filter((path) => path.edges.length === minLength)
+    .sort((a, b) => compareIds(pathKey(a.nodes), pathKey(b.nodes)));
+  const witness = shortest[0];
+  return witness === undefined
+    ? { witness: null, witnessCount: 0 }
+    : { witness, witnessCount: shortest.length };
 }
 
 /**
@@ -223,15 +251,25 @@ export function computeImpact(
     const indirectVia = boundArticles.filter((id) => indirectIds.has(id));
 
     if (directVia.length > 0) {
-      direct.push({ ruleId, level: "DIRECT", via: directVia });
-      for (const articleId of directVia) {
-        paths.push({ ruleId, impact: "DIRECT", nodes: [articleId], edges: [] });
-      }
+      const rulePaths = directVia.map(
+        (articleId): PropagationPath => ({
+          ruleId,
+          impact: "DIRECT",
+          nodes: [articleId],
+          edges: [],
+        }),
+      );
+      direct.push({
+        ruleId,
+        level: "DIRECT",
+        via: directVia,
+        ...selectWitness(rulePaths),
+      });
+      paths.push(...rulePaths);
       continue;
     }
 
     if (indirectVia.length > 0) {
-      indirect.push({ ruleId, level: "INDIRECT", via: indirectVia });
       const rulePaths: PropagationPath[] = [];
       for (const chain of enumerateSimplePaths(
         adjacency,
@@ -253,11 +291,24 @@ export function computeImpact(
         }
         rulePaths.push({ ruleId, impact: "INDIRECT", nodes, edges: chain });
       }
-      paths.push(...dedupeAndSortPaths(rulePaths));
+      const completePaths = dedupeAndSortPaths(rulePaths);
+      indirect.push({
+        ruleId,
+        level: "INDIRECT",
+        via: indirectVia,
+        ...selectWitness(completePaths),
+      });
+      paths.push(...completePaths);
       continue;
     }
 
-    unaffected.push({ ruleId, level: "UNAFFECTED", via: [] });
+    unaffected.push({
+      ruleId,
+      level: "UNAFFECTED",
+      via: [],
+      witness: null,
+      witnessCount: 0,
+    });
   }
 
   const orderedPaths = [...paths].sort(
@@ -279,6 +330,16 @@ export function computeImpact(
     ...orderedPaths.flatMap((path) => path.edges),
   ]);
 
+  const diagnostics: Diagnostic[] = missingSuccession.map((entry) => ({
+    code: "MISSING_SUCCESSION",
+    stableId: entry.stableId,
+    boundRuleIds: entry.boundRuleIds,
+    message:
+      `Article ${entry.stableId} has no succession edge into version ` +
+      `${query.toVersion} and no same-stable-ID counterpart there; ` +
+      `identity is not inferred from labels or text.`,
+  }));
+
   return {
     query,
     versionContext: {
@@ -298,6 +359,7 @@ export function computeImpact(
     unchangedArticles,
     addedArticles,
     rules: { direct, indirect, unaffected },
+    diagnostics,
     paths: orderedPaths,
     traversedEdges,
   };

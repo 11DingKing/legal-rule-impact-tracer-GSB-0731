@@ -29,9 +29,16 @@ Smoke walkthrough:
 curl -X POST localhost:3000/imports \
   -H 'content-type: application/json' --data-binary @materials/revision-graph.json
 
+curl -X POST localhost:3000/imports \
+  -H 'content-type: application/json' --data-binary @materials/draft-2-revision.json
+
 curl -X POST localhost:3000/impact-queries \
   -H 'content-type: application/json' \
   -d '{"fromVersion":"LAW-V1","toVersion":"LAW-V2"}'
+
+curl -X POST localhost:3000/impact-queries \
+  -H 'content-type: application/json' \
+  -d '{"fromVersion":"LAW-V1","toVersion":"LAW-DRAFT-2"}'
 
 curl localhost:3000/snapshots/<snapshotId>/replay
 ```
@@ -43,6 +50,13 @@ explicit succession edges, cross-references, effective dates, and bound business
 rules. Its invariants are enforced by the domain evaluator: paths are
 deterministic, draft and published-not-effective queries remain distinct, and
 missing succession is reported rather than guessed.
+
+`materials/draft-2-revision.json` is the `LAW-DRAFT-2` revision draft. It
+deliberately stresses the evaluator: `ART-S` participates in a one-to-many
+split (as source) and a two-to-one merge (as target of `ART-M1` + `ART-M2`) at
+the same time; `ART-GONE` declares no succession edge at all and must surface
+as a `MISSING_SUCCESSION` diagnostic; `ART-C1 ↔ ART-C2` form a cross-reference
+cycle and `ART-OBS` cites both, producing two equal-length shortest witnesses.
 
 ## Architecture
 
@@ -130,10 +144,18 @@ Response `201`:
     "unchangedArticles": [],
     "addedArticles": [],
     "rules": {
-      "direct":    [{"ruleId": "RULE-ELIGIBILITY-01", "level": "DIRECT", "via": ["ART-A"]}],
-      "indirect":  [{"ruleId": "RULE-SERVICE-02", "level": "INDIRECT", "via": ["ART-B"]}],
+      "direct":    [{"ruleId": "RULE-ELIGIBILITY-01", "level": "DIRECT", "via": ["ART-A"],
+                     "witness": {"ruleId": "RULE-ELIGIBILITY-01", "impact": "DIRECT",
+                                 "nodes": ["ART-A"], "edges": []},
+                     "witnessCount": 1}],
+      "indirect":  [{"ruleId": "RULE-SERVICE-02", "level": "INDIRECT", "via": ["ART-B"],
+                     "witness": {"ruleId": "RULE-SERVICE-02", "impact": "INDIRECT",
+                                 "nodes": ["ART-A", "ART-B"], "edges": […]},
+                     "witnessCount": 1}],
       "unaffected": []
     },
+    "diagnostics": [{"code": "MISSING_SUCCESSION", "stableId": "ART-B",
+                     "boundRuleIds": ["RULE-SERVICE-02"], "message": "…"}],
     "paths": [
       {"ruleId": "RULE-SERVICE-02", "impact": "INDIRECT",
        "nodes": ["ART-A", "ART-B"],
@@ -191,6 +213,15 @@ Given `fromVersion → toVersion`:
 6. **Rule levels** — a bound rule is `DIRECT` when bound to a changed article,
    `INDIRECT` when bound only to articles in the propagation closure,
    `UNAFFECTED` otherwise. `via` lists the bound articles responsible.
+7. **Witnesses** — every affected rule also stores one _shortest propagation
+   witness_ (minimum edge count; ties broken by the lexicographically smallest
+   node sequence) plus `witnessCount`, the number of distinct witnesses sharing
+   that minimal length. Direct witnesses are the single changed bound articles,
+   so a rule bound to both merge partners gets `witnessCount: 2`.
+8. **Diagnostics** — `diagnostics` is a deterministically sorted list of
+   stable `{code, stableId, boundRuleIds, message}` entries, currently
+   `MISSING_SUCCESSION` only. Diagnostics report data gaps; they never carry
+   guessed identities.
 
 ## Deterministic paths and cycle handling
 
@@ -210,10 +241,18 @@ Given `fromVersion → toVersion`:
 
 ## Native verification
 
-- `npm test` — 15 tests across `src/domain/impact.spec.ts` (split, merge,
+- `npm test` — 26 tests across `src/domain/impact.spec.ts` (split, merge,
   cycles, missing succession, same-day versions, determinism, large-graph path
-  dedup/sort) and `test/app.e2e.spec.ts` (duplicate imports, malformed imports,
-  unknown versions, snapshot immutability under later imports, replay).
+  dedup/sort), `src/domain/draft-2.spec.ts` (draft revision classification,
+  shortest witnesses and equal-length counts, stable diagnostics, reversed
+  record order), `test/app.e2e.spec.ts` (duplicate imports, malformed imports,
+  unknown versions, snapshot immutability under later imports, replay) and
+  `test/draft-2.e2e.spec.ts` (byte-level identity of results, paths and
+  diagnostics across reversed import order, duplicate imports, and separately
+  executed cycle-bearing subgraphs).
 - `npm run start:dev` — watch-mode server; smoke walkthrough above.
+
+Byte-level comparisons use canonical JSON (recursively sorted keys), the same
+serialization used for content hashing and snapshot integrity checks.
 
 Docker is not an acceptance item.
