@@ -17,10 +17,12 @@ export class ImpactController {
       maxPathLength: dto.maxPathLength,
       maxPathsPerTarget: dto.maxPathsPerTarget,
     };
-    const { result, snapshot } = this.impactService.queryImpact(query);
+    const { result, snapshot, cacheHit } = this.impactService.queryImpact(query);
     return {
       snapshotId: snapshot.id,
       graphHash: snapshot.graphHash,
+      queryHash: result.context.graphHash,
+      cacheHit,
       createdAt: snapshot.createdAt,
       result,
     };

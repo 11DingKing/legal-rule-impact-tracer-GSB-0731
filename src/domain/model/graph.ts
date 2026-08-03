@@ -113,6 +113,13 @@ export function buildGraph(
   const edges: GraphEdge[] = [];
   const dangling: DanglingReference[] = [];
 
+  const recordedAtFor = (versionId: string): string => {
+    const v = versions.get(versionId);
+    if (!v) return '0000-01-01T00:00:00.000Z';
+    if (v.status === 'DRAFT') return '0000-01-01T00:00:00.000Z';
+    return v.effectiveFrom ?? '0000-01-01T00:00:00.000Z';
+  };
+
   for (const a of articlesInput) {
     const refs = a.references ?? [];
     for (const refStableId of refs) {
@@ -146,6 +153,9 @@ export function buildGraph(
         successionKind: null,
         ruleId: null,
         refStableId,
+        recordedAt: recordedAtFor(a.version),
+        fromVersionId: a.version,
+        toVersionId: target.versionId,
       });
     }
   }
@@ -153,6 +163,7 @@ export function buildGraph(
   for (const s of successionInput) {
     const fromList = toArray(s.from);
     const toList = toArray(s.to);
+    const declaredRecordedAt = s.recordedAt ?? null;
     for (const fStable of fromList) {
       const fVersions = articlesByStable.get(fStable);
       if (!fVersions || fVersions.length === 0) continue;
@@ -166,6 +177,7 @@ export function buildGraph(
             const tVer = versions.get(tNode.versionId);
             if (!tVer) continue;
             if (tVer.ordinal <= fVer.ordinal) continue;
+            const naturalRecordedAt = recordedAtFor(fNode.versionId);
             edges.push({
               from: fNode.key,
               to: tNode.key,
@@ -173,6 +185,9 @@ export function buildGraph(
               successionKind: s.kind,
               ruleId: null,
               refStableId: null,
+              recordedAt: declaredRecordedAt ?? naturalRecordedAt,
+              fromVersionId: fNode.versionId,
+              toVersionId: tNode.versionId,
             });
           }
         }
@@ -205,6 +220,8 @@ export function buildGraph(
 
   for (const rule of rules.values()) {
     for (const k of rule.boundKeys) {
+      const article = articlesByKey.get(k);
+      const vId = article?.versionId ?? '';
       edges.push({
         from: k,
         to: k,
@@ -212,6 +229,9 @@ export function buildGraph(
         successionKind: null,
         ruleId: rule.ruleId,
         refStableId: null,
+        recordedAt: recordedAtFor(vId),
+        fromVersionId: vId,
+        toVersionId: vId,
       });
     }
   }
@@ -221,7 +241,7 @@ export function buildGraph(
   const dedupedEdges: GraphEdge[] = [];
   let lastKey = '';
   for (const e of edges) {
-    const key = `${e.from}\u0000${e.to}\u0000${e.kind}\u0000${e.successionKind ?? ''}\u0000${e.ruleId ?? ''}\u0000${e.refStableId ?? ''}`;
+    const key = `${e.from}\u0000${e.to}\u0000${e.kind}\u0000${e.successionKind ?? ''}\u0000${e.ruleId ?? ''}\u0000${e.refStableId ?? ''}\u0000${e.recordedAt}`;
     if (key === lastKey) continue;
     lastKey = key;
     dedupedEdges.push(e);
@@ -285,5 +305,6 @@ function compareEdges(a: GraphEdge, b: GraphEdge): number {
   if (ra !== rb) return ra < rb ? -1 : 1;
   const refA = a.refStableId ?? '';
   const refB = b.refStableId ?? '';
-  return refA < refB ? -1 : refA > refB ? 1 : 0;
+  if (refA !== refB) return refA < refB ? -1 : 1;
+  return a.recordedAt < b.recordedAt ? -1 : a.recordedAt > b.recordedAt ? 1 : 0;
 }

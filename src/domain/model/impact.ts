@@ -1,13 +1,18 @@
+import { createHash } from 'crypto';
 import type {
   ArticleImpact,
   ArticleKey,
   DanglingReference,
   EdgeKind,
+  GraphEdge,
   ImpactQuery,
   ImpactResult,
   MissingSuccession,
+  PropagationEdgeRecord,
   PropagationPath,
+  QueryContext,
   RuleImpact,
+  VersionResolution,
 } from './types';
 import type { BuiltGraph } from './graph';
 import { parseArticleKey } from './article-key';
@@ -51,12 +56,16 @@ export function computeImpact(
     ?? query.maxPathsPerTarget
     ?? DEFAULT_MAX_PATHS_PER_TARGET;
 
-  const seedKeys = collectSeedKeys(graph, query);
+  const versionResolutions = resolveVersions(graph, query.queryAt);
+  const filtered = filterGraphByTime(graph, query);
+  const context = buildQueryContext(query, versionResolutions, filtered);
+
+  const seedKeys = collectSeedKeys({ edges: filtered.visibleEdges }, query);
   const directKeys = new Set<ArticleKey>(seedKeys);
 
-  const traversal = buildTraversalAdjacency(graph);
+  const traversal = buildTraversalAdjacency({ edges: filtered.visibleEdges });
   const index = buildShortestPathIndex(
-    graph,
+    new Set<ArticleKey>(graph.articlesByKey.keys()),
     seedKeys,
     traversal,
     maxPathLength,
@@ -89,17 +98,19 @@ export function computeImpact(
 
   const ruleImpacts = buildRuleImpacts(
     graph,
+    filtered,
     directKeys,
     indirectKeys,
     pathMap,
     index,
   );
 
-  const missing = detectMissingSuccession(graph, query);
+  const missing = detectMissingSuccession(graph, filtered, query);
   const dangling: ReadonlyArray<DanglingReference> = graph.danglingReferences;
 
   return {
     query,
+    context,
     articles: articleImpacts,
     rules: ruleImpacts,
     directKeys: Object.freeze([...directKeys].sort()),
@@ -111,25 +122,114 @@ export function computeImpact(
   };
 }
 
-function collectSeedKeys(
+export interface TimeFilteredGraph {
+  readonly visibleEdges: ReadonlyArray<GraphEdge>;
+  readonly suppressedBackfillEdges: ReadonlyArray<GraphEdge>;
+}
+
+function filterGraphByTime(
   graph: BuiltGraph,
+  query: ImpactQuery,
+): TimeFilteredGraph {
+  const visible: GraphEdge[] = [];
+  const suppressed: GraphEdge[] = [];
+  for (const e of graph.edges) {
+    if (e.recordedAt <= query.queryAt) visible.push(e);
+    else suppressed.push(e);
+  }
+  return {
+    visibleEdges: Object.freeze(visible),
+    suppressedBackfillEdges: Object.freeze(suppressed),
+  };
+}
+
+function resolveVersions(
+  graph: BuiltGraph,
+  queryAt: string,
+): ReadonlyArray<VersionResolution> {
+  const out: VersionResolution[] = [];
+  for (const id of graph.versionOrder) {
+    const v = graph.versions.get(id);
+    if (!v) continue;
+    const effectiveAtQuery =
+      v.effectiveFrom !== null && v.effectiveFrom <= queryAt;
+    let resolved = v.status;
+    if (v.status !== 'DRAFT' && effectiveAtQuery) resolved = 'EFFECTIVE';
+    else if (v.status === 'EFFECTIVE' && !effectiveAtQuery) resolved = 'PUBLISHED';
+    out.push({
+      id: v.id,
+      declaredStatus: v.status,
+      effectiveFrom: v.effectiveFrom,
+      ordinal: v.ordinal,
+      effectiveAtQuery,
+      resolvedStatus: resolved,
+    });
+  }
+  return Object.freeze(out);
+}
+
+function buildQueryContext(
+  query: ImpactQuery,
+  versionResolutions: ReadonlyArray<VersionResolution>,
+  filtered: TimeFilteredGraph,
+): QueryContext {
+  const sequence: PropagationEdgeRecord[] = filtered.visibleEdges
+    .filter((e) => e.kind !== 'BOUND_RULE')
+    .map((e) => ({
+      from: e.from,
+      to: e.to,
+      kind: e.kind,
+      successionKind: e.successionKind,
+      refStableId: e.refStableId,
+      recordedAt: e.recordedAt,
+    }));
+
+  const hash = createHash('sha256');
+  hash.update(`QUERY:${query.fromVersionId}>${query.toVersionId}@${query.queryAt}\n`);
+  for (const v of versionResolutions) {
+    hash.update(
+      `V:${v.id}|${v.declaredStatus}|${v.effectiveFrom ?? ''}|${v.ordinal}|${v.effectiveAtQuery}|${v.resolvedStatus}\n`,
+    );
+  }
+  for (const e of sequence) {
+    hash.update(
+      `E:${e.from}|${e.to}|${e.kind}|${e.successionKind ?? ''}|${e.refStableId ?? ''}|${e.recordedAt}\n`,
+    );
+  }
+
+  return {
+    fromVersionId: query.fromVersionId,
+    toVersionId: query.toVersionId,
+    queryAt: query.queryAt,
+    graphHash: hash.digest('hex'),
+    versionResolutions,
+    propagationEdgeSequence: Object.freeze(sequence),
+    visibleEdgeCount: filtered.visibleEdges.length,
+    suppressedBackfillCount: filtered.suppressedBackfillEdges.length,
+  };
+}
+
+interface EdgeSource {
+  readonly edges: ReadonlyArray<GraphEdge>;
+}
+
+function collectSeedKeys(
+  source: EdgeSource,
   query: ImpactQuery,
 ): ReadonlyArray<ArticleKey> {
   const seeds = new Set<ArticleKey>();
-  for (const e of graph.edges) {
+  for (const e of source.edges) {
     if (e.kind !== 'SUCCESSION') continue;
-    const fromVer = parseArticleKey(e.from).versionId;
-    const toVer = parseArticleKey(e.to).versionId;
-    if (fromVer === query.fromVersionId && toVer === query.toVersionId) {
-      seeds.add(e.from);
-      seeds.add(e.to);
-    }
+    if (e.fromVersionId !== query.fromVersionId) continue;
+    if (e.toVersionId !== query.toVersionId) continue;
+    seeds.add(e.from);
+    seeds.add(e.to);
   }
   return [...seeds].sort();
 }
 
 function buildTraversalAdjacency(
-  graph: BuiltGraph,
+  source: EdgeSource,
 ): ReadonlyMap<ArticleKey, ReadonlyArray<TraversalEdge>> {
   const adj = new Map<ArticleKey, TraversalEdge[]>();
   const add = (e: TraversalEdge): void => {
@@ -138,7 +238,7 @@ function buildTraversalAdjacency(
     else adj.set(e.from, [e]);
   };
 
-  for (const e of graph.edges) {
+  for (const e of source.edges) {
     if (e.kind === 'SUCCESSION') {
       add({
         from: e.from,
@@ -171,7 +271,7 @@ function compareTraversalEdges(a: TraversalEdge, b: TraversalEdge): number {
 }
 
 function buildShortestPathIndex(
-  graph: BuiltGraph,
+  knownArticles: ReadonlySet<ArticleKey>,
   seeds: ReadonlyArray<ArticleKey>,
   adj: ReadonlyMap<ArticleKey, ReadonlyArray<TraversalEdge>>,
   maxLen: number,
@@ -194,7 +294,7 @@ function buildShortestPathIndex(
     if (!edges) continue;
 
     for (const e of edges) {
-      if (!graph.articlesByKey.has(e.to)) continue;
+      if (!knownArticles.has(e.to)) continue;
       const existing = distance.get(e.to);
       if (existing === undefined) {
         distance.set(e.to, d + 1);
@@ -475,17 +575,28 @@ function deriveLexicographicallySmallestPath(
 
 function buildRuleImpacts(
   graph: BuiltGraph,
+  filtered: TimeFilteredGraph,
   direct: ReadonlySet<ArticleKey>,
   indirect: ReadonlySet<ArticleKey>,
   pathMap: PathEnumerationResult,
   index: ShortestPathIndex,
 ): ReadonlyArray<RuleImpact> {
+  const visibleBindingsByRule = new Map<string, Set<ArticleKey>>();
+  for (const e of filtered.visibleEdges) {
+    if (e.kind !== 'BOUND_RULE' || !e.ruleId) continue;
+    const set = visibleBindingsByRule.get(e.ruleId);
+    if (set) set.add(e.to);
+    else visibleBindingsByRule.set(e.ruleId, new Set<ArticleKey>([e.to]));
+  }
+
   const out: RuleImpact[] = [];
   for (const rule of graph.rules.values()) {
+    const visibleKeys = visibleBindingsByRule.get(rule.ruleId);
+    if (!visibleKeys || visibleKeys.size === 0) continue;
     let level: 'DIRECT' | 'INDIRECT' | 'UNAFFECTED' = 'UNAFFECTED';
     const directArticles: ArticleKey[] = [];
     const indirectArticles: ArticleKey[] = [];
-    for (const k of rule.boundKeys) {
+    for (const k of visibleKeys) {
       if (direct.has(k)) {
         if (level !== 'INDIRECT') level = 'DIRECT';
         directArticles.push(k);
@@ -493,6 +604,17 @@ function buildRuleImpacts(
         if (level === 'UNAFFECTED') level = 'INDIRECT';
         indirectArticles.push(k);
       }
+    }
+    if (level === 'UNAFFECTED') {
+      out.push({
+        ruleId: rule.ruleId,
+        level,
+        articleKeys: Object.freeze([]),
+        paths: Object.freeze([]),
+        shortestWitness: null,
+        equalLengthWitnessCount: 0,
+      });
+      continue;
     }
     const affected = [...directArticles, ...indirectArticles].sort();
     const paths: PropagationPath[] = [];
@@ -572,6 +694,7 @@ function computeRuleWitnessCount(
 
 function detectMissingSuccession(
   graph: BuiltGraph,
+  filtered: TimeFilteredGraph,
   query: ImpactQuery,
 ): ReadonlyArray<MissingSuccession> {
   const out: MissingSuccession[] = [];
@@ -585,11 +708,10 @@ function detectMissingSuccession(
 
   const coveredFromStable = new Set<string>();
   const coveredToStable = new Set<string>();
-  for (const e of graph.edges) {
+  for (const e of filtered.visibleEdges) {
     if (e.kind !== 'SUCCESSION') continue;
-    const fv = parseArticleKey(e.from).versionId;
-    const tv = parseArticleKey(e.to).versionId;
-    if (fv !== query.fromVersionId || tv !== query.toVersionId) continue;
+    if (e.fromVersionId !== query.fromVersionId) continue;
+    if (e.toVersionId !== query.toVersionId) continue;
     coveredFromStable.add(parseArticleKey(e.from).stableId);
     coveredToStable.add(parseArticleKey(e.to).stableId);
   }

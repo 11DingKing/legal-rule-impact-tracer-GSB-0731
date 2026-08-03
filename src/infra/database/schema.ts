@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS successions (
   from_stable_id TEXT NOT NULL,
   to_stable_id TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('SPLIT','MERGE','RENUMBER','REPLACE')),
-  UNIQUE(from_stable_id, to_stable_id, kind)
+  recorded_at TEXT,
+  UNIQUE(from_stable_id, to_stable_id, kind, recorded_at)
 );
 
 CREATE TABLE IF NOT EXISTS bindings (

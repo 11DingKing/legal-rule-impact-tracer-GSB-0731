@@ -296,6 +296,56 @@ edits are imported afterward.
 | Large graph / path explosion                                | Shortest-path-only enumeration, per-target cap, hard DFS budget, `truncated` flag. Deterministic ordering preserved.                    |
 | Draft vs published-not-effective queries                    | Versions are addressed by id, so `LAW-DRAFT-2` and `LAW-V2` produce distinct result sets even on the same calendar date.                |
 
+## Time-aware queries, backfilled edges, and query binding
+
+Every `ImpactResult` carries a `context` object that binds the query to the
+exact graph state used for evaluation:
+
+```jsonc
+"context": {
+  "fromVersionId": "LAW-V1",
+  "toVersionId": "LAW-V2",
+  "queryAt": "2027-02-01T00:00:00.000Z",
+  "graphHash": "sha256-hex",          // hash over visible graph + version resolutions
+  "versionResolutions": [
+    { "id": "LAW-V1", "declaredStatus": "EFFECTIVE", "effectiveFrom": "2026-01-01",
+      "ordinal": 0, "effectiveAtQuery": true, "resolvedStatus": "EFFECTIVE" },
+    { "id": "LAW-V2", "declaredStatus": "PUBLISHED", "effectiveFrom": "2027-01-01",
+      "ordinal": 1, "effectiveAtQuery": true, "resolvedStatus": "EFFECTIVE" }
+  ],
+  "propagationEdgeSequence": [ /* every visible SUCCESSION/REFERENCE edge in canonical order, with recordedAt */ ],
+  "visibleEdgeCount": 58,
+  "suppressedBackfillCount": 0
+}
+```
+
+- **Version resolution.** `resolvedStatus` is recomputed from `queryAt`: a
+  `PUBLISHED` version whose `effectiveFrom <= queryAt` is reported as
+  `EFFECTIVE`; an `EFFECTIVE` version queried before its date is downgraded to
+  `PUBLISHED`. `DRAFT` versions stay `DRAFT`.
+- **Edge recording dates.** Each `GraphEdge` has a `recordedAt`. Succession
+  edges default to the source version's availability (DRAFT → epoch, so draft
+  succession is always visible; EFFECTIVE/PUBLISHED → their `effectiveFrom`).
+  A succession may declare `recordedAt` explicitly to model a **backfill** —
+  an inheritance edge discovered and recorded after the fact. Edges with
+  `recordedAt > queryAt` are suppressed during evaluation and counted in
+  `suppressedBackfillCount`.
+- **Backfills cannot rewrite history.** A backfill recorded at 2027-06-15 is
+  invisible to every earlier `queryAt`; old snapshots still show the
+  missing-edge diagnostic. At a later `queryAt` it becomes visible, changes
+  the graph hash, and produces a new snapshot.
+- **Result cache.** `ImpactService` caches query results keyed by
+  `(fullGraphHash, queryHash, versions, queryAt)`. A backfill changes
+  `fullGraphHash` even when visible edges are identical (suppressed), so the
+  cache correctly misses and re-evaluates; identical re-queries hit the cache
+  (`cacheHit: true` on the HTTP response).
+
+The four supported query moments are demonstrated with
+`materials/timepoints.json`: draft period, published-but-not-effective,
+effective, and post-backfill. See
+`src/domain/timepoints.spec.ts` and
+`src/app/timepoints.integration.spec.ts`.
+
 ## Testing
 
 ```bash
@@ -307,21 +357,24 @@ Covers:
 - Pure domain: split, merge, cycles, missing succession, large-graph path
   dedup and ordering, snapshot immutability, snapshot isolation after later
   imports, no label-based guessing, same-day version ordering.
-- `LAW-DRAFT-2` fixture (`materials/law-draft-2.json`): one stable ID
-  participates in a one-to-many split while two other IDs merge into a new
-  article; one deliberately missing succession edge (`ART-Z`); a `G ↔ H`
-  cross-reference cycle; direct / indirect / unaffected rules; each affected
-  rule carries a `shortestWitness` and `equalLengthWitnessCount`.
-- Determinism: the LAW-DRAFT-2 scenario is executed (a) with records in the
-  imported order, (b) with every array reversed, and (c) duplicated — at both
-  the pure-domain level and through the NestJS + SQLite stack. Direct/indirect
-  key sets, affected-rule witnesses/counts, and missing-succession diagnostics
-  are byte-for-byte identical across all three. Adding an isolated cyclic
-  subgraph that contains no succession into the target version also leaves the
-  affected output unchanged.
-- Service/integration: idempotent import, DIRECT/INDIRECT/UNAFFECTED
-  computation, snapshot persistence and replay, unknown version errors,
-  same-day version ordinal.
+- `LAW-DRAFT-2` fixture (`materials/law-draft-2.json`): split + merge on
+  overlapping stable IDs, deliberate missing edge, G↔H cross-reference cycle,
+  direct/indirect/unaffected rules with shortest witness and equal-length
+  witness counts; byte-level determinism across reversed/duplicated/cyclic
+  inputs.
+- Four timepoints (`materials/timepoints.json`): DRAFT / PUBLISHED-not-effective
+  / EFFECTIVE / post-backfill, with version-status resolution, per-edge
+  `recordedAt` filtering, suppressed-backfill counts, and distinct query
+  hashes per moment.
+- Backfill drift prevention: a snapshot taken before a backfill keeps its
+  missing-edge diagnostic and edge sequence on replay even after the backfill
+  is imported; post-backfill queries at a later `queryAt` see the new edge and
+  a changed graph hash.
+- Cache invalidation: identical queries hit the cache; backfill changes the
+  full-graph hash and forces a miss; the new result is then cached.
+- Same-day multiple versions and cross-reference cycles remain deterministic.
+- Service/integration: idempotent import, snapshot persistence and replay,
+  unknown version errors.
 - HTTP: full import → query → list → replay round-trip via supertest.
 
 ## Source material

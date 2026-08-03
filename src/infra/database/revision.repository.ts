@@ -33,6 +33,7 @@ interface SuccessionRow {
   from_stable_id: string;
   to_stable_id: string;
   kind: string;
+  recorded_at: string | null;
 }
 
 interface BindingRow {
@@ -137,8 +138,8 @@ export class RevisionRepository {
   ): { inserted: number; duplicates: number } {
     const db = this.dbService.getDb();
     const insert = db.prepare(
-      `INSERT OR IGNORE INTO successions (from_stable_id, to_stable_id, kind)
-       VALUES (?, ?, ?)`,
+      `INSERT OR IGNORE INTO successions (from_stable_id, to_stable_id, kind, recorded_at)
+       VALUES (?, ?, ?, ?)`,
     );
     const countBefore = (
       db.prepare(`SELECT COUNT(*) as c FROM successions`).get() as { c: number }
@@ -148,10 +149,11 @@ export class RevisionRepository {
       for (const s of rows) {
         const fromList = Array.isArray(s.from) ? s.from : [s.from];
         const toList = Array.isArray(s.to) ? s.to : [s.to];
+        const recordedAt = s.recordedAt ?? null;
         for (const f of fromList) {
           for (const t of toList) {
             totalPairs.value++;
-            insert.run(f, t, s.kind);
+            insert.run(f, t, s.kind, recordedAt);
           }
         }
       }
@@ -240,19 +242,20 @@ export class RevisionRepository {
     const db = this.dbService.getDb();
     const rows = db
       .prepare(
-        `SELECT from_stable_id, to_stable_id, kind FROM successions ORDER BY from_stable_id, to_stable_id, kind`,
+        `SELECT from_stable_id, to_stable_id, kind, recorded_at FROM successions ORDER BY from_stable_id, to_stable_id, kind, recorded_at`,
       )
       .all() as SuccessionRow[];
     const grouped = new Map<
       string,
-      { kind: SuccessionKind; from: Set<string>; to: Set<string> }
+      { kind: SuccessionKind; recordedAt: string | null; from: Set<string>; to: Set<string> }
     >();
     for (const r of rows) {
-      const key = `${r.kind}`;
+      const key = `${r.kind}\u0000${r.recorded_at ?? ''}`;
       let entry = grouped.get(key);
       if (!entry) {
         entry = {
           kind: r.kind as SuccessionKind,
+          recordedAt: r.recorded_at,
           from: new Set<string>(),
           to: new Set<string>(),
         };
@@ -261,11 +264,15 @@ export class RevisionRepository {
       entry.from.add(r.from_stable_id);
       entry.to.add(r.to_stable_id);
     }
-    return [...grouped.values()].map((g) => ({
-      from: Object.freeze([...g.from].sort()),
-      to: Object.freeze([...g.to].sort()),
-      kind: g.kind,
-    }));
+    return [...grouped.values()].map((g) => {
+      const out: SuccessionInput = {
+        from: Object.freeze([...g.from].sort()),
+        to: Object.freeze([...g.to].sort()),
+        kind: g.kind,
+      };
+      if (g.recordedAt !== null) out.recordedAt = g.recordedAt;
+      return out;
+    });
   }
 
   loadBindings(): ReadonlyArray<BindingInput> {

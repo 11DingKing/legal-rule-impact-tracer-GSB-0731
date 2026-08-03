@@ -23,6 +23,7 @@ export interface SuccessionInput {
   from: string | ReadonlyArray<string>;
   to: string | ReadonlyArray<string>;
   kind: SuccessionKind;
+  recordedAt?: string | null;
 }
 
 export interface BindingInput {
@@ -53,6 +54,18 @@ export interface GraphEdge {
   readonly successionKind: SuccessionKind | null;
   readonly ruleId: string | null;
   readonly refStableId: string | null;
+  readonly recordedAt: string;
+  readonly fromVersionId: string;
+  readonly toVersionId: string;
+}
+
+export interface VersionResolution {
+  readonly id: string;
+  readonly declaredStatus: VersionStatus;
+  readonly effectiveFrom: string | null;
+  readonly ordinal: number;
+  readonly effectiveAtQuery: boolean;
+  readonly resolvedStatus: VersionStatus;
 }
 
 export interface RuleNode {
@@ -115,8 +128,29 @@ export interface DanglingReference {
   readonly reason: string;
 }
 
+export interface PropagationEdgeRecord {
+  readonly from: ArticleKey;
+  readonly to: ArticleKey;
+  readonly kind: EdgeKind;
+  readonly successionKind: SuccessionKind | null;
+  readonly refStableId: string | null;
+  readonly recordedAt: string;
+}
+
+export interface QueryContext {
+  readonly fromVersionId: string;
+  readonly toVersionId: string;
+  readonly queryAt: string;
+  readonly graphHash: string;
+  readonly versionResolutions: ReadonlyArray<VersionResolution>;
+  readonly propagationEdgeSequence: ReadonlyArray<PropagationEdgeRecord>;
+  readonly visibleEdgeCount: number;
+  readonly suppressedBackfillCount: number;
+}
+
 export interface ImpactResult {
   readonly query: ImpactQuery;
+  readonly context: QueryContext;
   readonly articles: ReadonlyArray<ArticleImpact>;
   readonly rules: ReadonlyArray<RuleImpact>;
   readonly directKeys: ReadonlyArray<ArticleKey>;

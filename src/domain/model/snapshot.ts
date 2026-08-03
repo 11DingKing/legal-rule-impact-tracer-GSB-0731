@@ -152,7 +152,7 @@ function hashGraph(
   h.update('EDGES\n');
   for (const e of edges) {
     h.update(
-      `${e.from}|${e.to}|${e.kind}|${e.successionKind ?? ''}|${e.ruleId ?? ''}|${e.refStableId ?? ''}\n`,
+      `${e.from}|${e.to}|${e.kind}|${e.successionKind ?? ''}|${e.ruleId ?? ''}|${e.refStableId ?? ''}|${e.recordedAt}|${e.fromVersionId}|${e.toVersionId}\n`,
     );
   }
   h.update('RULES\n');
