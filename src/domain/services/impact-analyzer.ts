@@ -9,16 +9,24 @@ import {
   ImpactReport,
   MissingSuccession,
   RuleImpact,
+  RuleWitness,
 } from '../models/impact-report';
 import { PropagationPath } from '../models/propagation-path';
 import { ReadOnlyRevisionGraph } from '../models/revision-graph';
 import { PathTracer, TraceSeed } from './path-tracer';
+import { ShortestPathCalculator } from './shortest-path-calculator';
 
 export class ImpactAnalyzer {
   private readonly pathTracer: PathTracer;
+  private readonly shortestPathCalculator: ShortestPathCalculator;
 
-  constructor(pathTracer?: PathTracer) {
+  constructor(
+    pathTracer?: PathTracer,
+    shortestPathCalculator?: ShortestPathCalculator,
+  ) {
     this.pathTracer = pathTracer ?? new PathTracer();
+    this.shortestPathCalculator =
+      shortestPathCalculator ?? new ShortestPathCalculator();
   }
 
   analyze(
@@ -71,6 +79,18 @@ export class ImpactAnalyzer {
     const { directRules, indirectRules, unaffectedRules } =
       this.classifyRules(graph, directIds, indirectIds);
 
+    const shortestPathMap = this.shortestPathCalculator.calculate(
+      graph,
+      [...directIds],
+    );
+
+    const ruleWitnesses = this.buildRuleWitnesses(
+      graph,
+      directRules,
+      indirectRules,
+      shortestPathMap,
+    );
+
     const sortedPaths = this.ensurePathsIncludeSeeds(paths, directIds);
 
     return {
@@ -84,6 +104,7 @@ export class ImpactAnalyzer {
       directRules,
       indirectRules,
       unaffectedRules,
+      ruleWitnesses,
       missingSuccessions,
       paths: sortedPaths,
     };
@@ -257,6 +278,67 @@ export class ImpactAnalyzer {
     }
 
     return { directRules, indirectRules, unaffectedRules };
+  }
+
+  private buildRuleWitnesses(
+    graph: ReadOnlyRevisionGraph,
+    directRules: readonly RuleImpact[],
+    indirectRules: readonly RuleImpact[],
+    shortestPathMap: ReadonlyMap<
+      ArticleStableId,
+      {
+        readonly distance: number;
+        readonly equalLengthPathCount: number;
+        readonly witness: PropagationPath;
+      }
+    >,
+  ): RuleWitness[] {
+    const witnesses: RuleWitness[] = [];
+    const affectedRules = [...directRules, ...indirectRules].sort((a, b) =>
+      a.ruleId.localeCompare(b.ruleId),
+    );
+
+    for (const rule of affectedRules) {
+      const boundArticles = graph.getArticlesBoundToRule(rule.ruleId);
+      let minDistance = Number.POSITIVE_INFINITY;
+      let totalCount = 0;
+      let chosenWitness: PropagationPath | null = null;
+      let chosenArticleId: ArticleStableId | null = null;
+
+      const sortedBound = [...boundArticles].sort((a, b) =>
+        a.localeCompare(b),
+      );
+
+      for (const artId of sortedBound) {
+        const info = shortestPathMap.get(artId);
+        if (!info) continue;
+
+        if (info.distance < minDistance) {
+          minDistance = info.distance;
+          totalCount = info.equalLengthPathCount;
+          chosenWitness = info.witness;
+          chosenArticleId = artId;
+        } else if (info.distance === minDistance) {
+          totalCount += info.equalLengthPathCount;
+          if (chosenArticleId === null) {
+            chosenWitness = info.witness;
+            chosenArticleId = artId;
+          }
+        }
+      }
+
+      if (chosenWitness && chosenArticleId !== null) {
+        witnesses.push({
+          ruleId: rule.ruleId,
+          level: rule.level,
+          shortestDistance: minDistance,
+          equalLengthPathCount: totalCount,
+          witness: chosenWitness,
+        });
+      }
+    }
+
+    return witnesses;
   }
 
   private ensurePathsIncludeSeeds(

@@ -81,9 +81,15 @@ export class RevisionGraph implements ReadOnlyRevisionGraph {
     this.articles = [...articles].sort((a, b) =>
       a.stableId.localeCompare(b.stableId),
     );
-    this.successionEdges = [...successionEdges].sort((a, b) =>
-      a.fromStableId.localeCompare(b.fromStableId),
-    );
+    this.successionEdges = [...successionEdges].sort((a, b) => {
+      const fromCmp = a.fromStableId.localeCompare(b.fromStableId);
+      if (fromCmp !== 0) return fromCmp;
+      const kindCmp = a.kind.localeCompare(b.kind);
+      if (kindCmp !== 0) return kindCmp;
+      const aTo = [...a.toStableIds].sort().join(',');
+      const bTo = [...b.toStableIds].sort().join(',');
+      return aTo.localeCompare(bTo);
+    });
     this.bindings = [...bindings].sort((a, b) =>
       a.ruleId.localeCompare(b.ruleId),
     );

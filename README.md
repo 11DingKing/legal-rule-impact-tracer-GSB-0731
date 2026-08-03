@@ -11,7 +11,7 @@ and freezes every query into an immutable snapshot.
 - **Node.js 24** / **TypeScript 5.5** (strict mode, no `any`)
 - **NestJS 10** (HTTP controllers + dependency injection)
 - **SQLite** via `better-sqlite3` (persistence, immutable snapshots)
-- **Jest** (46 unit tests + 12 e2e acceptance tests)
+- **Jest** (80 unit tests + 16 e2e acceptance tests)
 
 ## Architecture
 
@@ -22,7 +22,7 @@ controllers nor SQLite adapters contain any impact-propagation logic.
 src/
   domain/                              # Pure, zero NestJS/SQLite dependencies
     models/                            # Entities, value objects, RevisionGraph
-    services/                          # GraphBuilder, PathTracer, ImpactAnalyzer, SnapshotFactory
+    services/                          # GraphBuilder, PathTracer, ShortestPathCalculator, ImpactAnalyzer, SnapshotFactory
     errors/                            # DomainError hierarchy
     ports/                             # Input interfaces
   application/
@@ -143,6 +143,7 @@ Response contains:
 | `report.directRules` / `indirectRules` / `unaffectedRules` | Business rules classified by their bound articles |
 | `report.missingSuccessions` | Articles in the source version with no explicit succession edge — **reported, never guessed** |
 | `report.paths`       | All propagation paths, sorted by depth then canonical key              |
+| `report.ruleWitnesses` | One shortest propagation witness per affected rule, plus count of all equal-length shortest paths |
 | `report.graphFingerprint` | Hash of the graph state at query time                             |
 
 #### Propagation paths
@@ -210,6 +211,56 @@ version, and its stable ID does not appear in the target version, it is reported
 in `missingSuccessions`. The system does not attempt to infer its fate from label
 or text similarity.
 
+### Shortest propagation witnesses
+
+For every affected rule (DIRECT or INDIRECT), the `ShortestPathCalculator`
+performs a BFS from the direct-impact set and records:
+
+- `shortestDistance` — minimum hop count from any direct article to any of the
+  rule's bound articles.
+- `equalLengthPathCount` — total number of distinct shortest paths reaching the
+  rule's bound articles at that distance. When multiple bound articles share the
+  same minimum distance, their counts are summed.
+- `witness` — one canonical shortest path (the first predecessor in sorted
+  adjacency order), provided as a concrete trace.
+
+DIRECT rules bound to seed articles have distance 0 and a count equal to the
+number of direct articles they bind. INDIRECT rules have distance ≥ 1. For
+example, if a new draft article `ART-F` cross-references both `ART-A1` and
+`ART-M` (both direct successors), the rule bound to `ART-F` receives a witness
+at distance 1 with `equalLengthPathCount: 2`.
+
+## LAW-DRAFT-2 scenario
+
+The `LAW-DRAFT-2` draft exercises the case where one stable article ID
+participates in both a SPLIT and a MERGE simultaneously:
+
+```
+ART-A (V1) ──SPLIT──▶ ART-A1 (DRAFT-2)
+                   └─▶ ART-A2 (DRAFT-2)
+ART-A (V1) ──MERGE──┐
+ART-B (V1) ──MERGE──┴─▶ ART-M  (DRAFT-2)
+ART-C (V1) ──REVISE──▶ ART-C1 (DRAFT-2, refs A1 + M)
+ART-E (V1) ──REVISE──▶ ART-E1 (DRAFT-2)
+ART-D (V1)               (intentionally NO succession edge — reported)
+ART-F (DRAFT-2, refs A1 + M — new article, indirectly affected)
+```
+
+This produces:
+
+| Rule | Bound to | Level | Shortest dist | Equal-length count |
+|------|----------|-------|---------------|--------------------|
+| `RULE-DIR-01` | ART-A | DIRECT | 0 | 1 |
+| `RULE-MERGE-02` | ART-B | DIRECT | 0 | 1 |
+| `RULE-REF-D-05` | ART-E | DIRECT | 0 | 1 |
+| `RULE-DRAFT-06` | ART-A1, ART-M | DIRECT | 0 | 2 |
+| `RULE-CARRY-07` | ART-C1 | DIRECT | 0 | 1 |
+| `RULE-REF-03` | ART-F | INDIRECT | 1 | 2 |
+| `RULE-MISSING-04` | ART-D | UNAFFECTED | — | — |
+
+ART-D appears in `missingSuccessions` with a stable diagnostic. No edge is
+guessed.
+
 ## Deterministic paths and cycle handling
 
 - **Cycle safety.** The DFS uses a per-path visited set; a node is never visited
@@ -239,17 +290,20 @@ computed at query time, including the original `graphFingerprint`.
 ## Testing
 
 ```bash
-npm test          # 46 domain unit tests
-npm run test:e2e  # 12 HTTP acceptance tests
+npm test          # 80 domain unit tests
+npm run test:e2e  # 16 HTTP acceptance tests
 ```
 
 Coverage includes:
 
 - One-to-many splits and many-to-one merges
+- Same stableId participating in both SPLIT and MERGE (LAW-DRAFT-2)
+- Shortest propagation witness with equal-length path counting
 - Cross-reference cycles (termination + complete coverage)
-- Missing succession reporting
+- Missing succession reporting (never guessed)
 - Same-day multiple target versions
 - Duplicate / idempotent imports
+- Byte-level determinism: reversed import order, duplicate imports, cycle subgraphs
 - Path deduplication and stable sorting on large graphs
 - Snapshot immutability after data changes
 
@@ -258,6 +312,7 @@ Coverage includes:
 - Domain core: [src/domain](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain)
 - Impact analyzer: [impact-analyzer.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain/services/impact-analyzer.ts)
 - Path tracer: [path-tracer.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain/services/path-tracer.ts)
+- Shortest path calculator: [shortest-path-calculator.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain/services/shortest-path-calculator.ts)
 - Graph builder: [graph-builder.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain/services/graph-builder.ts)
 - SQLite schema: [schema.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/infrastructure/persistence/sqlite/schema.ts)
 - HTTP controllers: [controllers](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/interfaces/http/controllers)

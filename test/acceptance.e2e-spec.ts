@@ -64,6 +64,43 @@ const CYCLE_GRAPH = {
   bindings: [{ ruleId: 'R-C', articleIds: ['C2'] }],
 };
 
+const DRAFT2_GRAPH = {
+  versions: [
+    { id: 'LAW-V1', status: 'EFFECTIVE', effectiveFrom: '2026-01-01' },
+    { id: 'LAW-DRAFT-2', status: 'DRAFT', effectiveFrom: null },
+    { id: 'LAW-V2', status: 'PUBLISHED', effectiveFrom: '2027-01-01' },
+  ],
+  articles: [
+    { stableId: 'ART-A', version: 'LAW-V1', label: '第十条', references: [] },
+    { stableId: 'ART-B', version: 'LAW-V1', label: '第十一条', references: ['ART-A'] },
+    { stableId: 'ART-C', version: 'LAW-V1', label: '第十二条', references: ['ART-A', 'ART-B'] },
+    { stableId: 'ART-D', version: 'LAW-V1', label: '第十三条', references: [] },
+    { stableId: 'ART-E', version: 'LAW-V1', label: '第十四条', references: ['ART-D'] },
+    { stableId: 'ART-A1', version: 'LAW-DRAFT-2', label: '草案第十条之一', references: [] },
+    { stableId: 'ART-A2', version: 'LAW-DRAFT-2', label: '草案第十条之二', references: [] },
+    { stableId: 'ART-M', version: 'LAW-DRAFT-2', label: '草案合并条', references: [] },
+    { stableId: 'ART-C1', version: 'LAW-DRAFT-2', label: '草案第十二条', references: ['ART-A1', 'ART-M'] },
+    { stableId: 'ART-E1', version: 'LAW-DRAFT-2', label: '草案第十四条', references: [] },
+    { stableId: 'ART-F', version: 'LAW-DRAFT-2', label: '草案新增交叉条', references: ['ART-A1', 'ART-M'] },
+  ],
+  succession: [
+    { from: 'ART-A', to: ['ART-A1', 'ART-A2'], kind: 'SPLIT' },
+    { from: 'ART-A', to: ['ART-M'], kind: 'MERGE' },
+    { from: 'ART-B', to: ['ART-M'], kind: 'MERGE' },
+    { from: 'ART-C', to: ['ART-C1'], kind: 'REVISE' },
+    { from: 'ART-E', to: ['ART-E1'], kind: 'REVISE' },
+  ],
+  bindings: [
+    { ruleId: 'RULE-DIR-01', articleIds: ['ART-A'] },
+    { ruleId: 'RULE-MERGE-02', articleIds: ['ART-B'] },
+    { ruleId: 'RULE-REF-03', articleIds: ['ART-F'] },
+    { ruleId: 'RULE-MISSING-04', articleIds: ['ART-D'] },
+    { ruleId: 'RULE-REF-D-05', articleIds: ['ART-E'] },
+    { ruleId: 'RULE-DRAFT-06', articleIds: ['ART-A1', 'ART-M'] },
+    { ruleId: 'RULE-CARRY-07', articleIds: ['ART-C1'] },
+  ],
+};
+
 describe('Legal Rule Impact Tracer — Acceptance (e2e)', () => {
   let app: INestApplication;
   let sqlite: SqliteService;
@@ -379,6 +416,107 @@ describe('Legal Rule Impact Tracer — Acceptance (e2e)', () => {
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThanOrEqual(1);
       expect(res.body[0].snapshotId).toBeDefined();
+    });
+  });
+
+  describe('LAW-DRAFT-2 — split + merge + missing edge', () => {
+    beforeEach(async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/import')
+        .send(DRAFT2_GRAPH)
+        .expect(200);
+    });
+
+    it('classifies direct, indirect and unaffected rules', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/impact/query')
+        .send({ sourceVersionId: 'LAW-V1', targetVersionId: 'LAW-DRAFT-2' })
+        .expect(200);
+
+      const r = res.body.report;
+      const directRuleIds = r.directRules.map(
+        (x: { ruleId: string }) => x.ruleId,
+      );
+      const indirectRuleIds = r.indirectRules.map(
+        (x: { ruleId: string }) => x.ruleId,
+      );
+      const unaffectedRuleIds = r.unaffectedRules.map(
+        (x: { ruleId: string }) => x.ruleId,
+      );
+
+      expect(directRuleIds).toContain('RULE-DIR-01');
+      expect(directRuleIds).toContain('RULE-MERGE-02');
+      expect(directRuleIds).toContain('RULE-REF-D-05');
+      expect(directRuleIds).toContain('RULE-DRAFT-06');
+      expect(directRuleIds).toContain('RULE-CARRY-07');
+      expect(indirectRuleIds).toContain('RULE-REF-03');
+      expect(unaffectedRuleIds).toContain('RULE-MISSING-04');
+    });
+
+    it('reports exactly one missing succession edge for ART-D', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/impact/query')
+        .send({ sourceVersionId: 'LAW-V1', targetVersionId: 'LAW-DRAFT-2' })
+        .expect(200);
+
+      expect(res.body.report.missingSuccessions).toHaveLength(1);
+      expect(res.body.report.missingSuccessions[0].stableId).toBe('ART-D');
+      expect(
+        res.body.report.missingSuccessions[0].reason,
+      ).toContain('no explicit succession edge');
+    });
+
+    it('provides shortest witness with equal-length count for each affected rule', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/impact/query')
+        .send({ sourceVersionId: 'LAW-V1', targetVersionId: 'LAW-DRAFT-2' })
+        .expect(200);
+
+      const witnesses = res.body.report.ruleWitnesses;
+
+      const refWitness = witnesses.find(
+        (w: { ruleId: string }) => w.ruleId === 'RULE-REF-03',
+      );
+      expect(refWitness).toBeDefined();
+      expect(refWitness.shortestDistance).toBe(1);
+      expect(refWitness.equalLengthPathCount).toBe(2);
+      expect(refWitness.witness.hops).toHaveLength(1);
+      expect(refWitness.witness.targetId).toBe('ART-F');
+
+      const draftWitness = witnesses.find(
+        (w: { ruleId: string }) => w.ruleId === 'RULE-DRAFT-06',
+      );
+      expect(draftWitness.shortestDistance).toBe(0);
+      expect(draftWitness.equalLengthPathCount).toBe(2);
+
+      const missingWitness = witnesses.find(
+        (w: { ruleId: string }) => w.ruleId === 'RULE-MISSING-04',
+      );
+      expect(missingWitness).toBeUndefined();
+    });
+
+    it('produces byte-identical paths and witnesses across repeated queries', async () => {
+      const res1 = await request(app.getHttpServer())
+        .post('/api/v1/impact/query')
+        .send({ sourceVersionId: 'LAW-V1', targetVersionId: 'LAW-DRAFT-2' })
+        .expect(200);
+      const res2 = await request(app.getHttpServer())
+        .post('/api/v1/impact/query')
+        .send({ sourceVersionId: 'LAW-V1', targetVersionId: 'LAW-DRAFT-2' })
+        .expect(200);
+
+      const r1 = res1.body.report;
+      const r2 = res2.body.report;
+      expect(JSON.stringify(r1.paths)).toBe(JSON.stringify(r2.paths));
+      expect(JSON.stringify(r1.missingSuccessions)).toBe(
+        JSON.stringify(r2.missingSuccessions),
+      );
+      expect(JSON.stringify(r1.ruleWitnesses)).toBe(
+        JSON.stringify(r2.ruleWitnesses),
+      );
+      expect(r1.graphFingerprint).toBe(r2.graphFingerprint);
+      expect(r1.directArticles).toEqual(r2.directArticles);
+      expect(r1.indirectArticles).toEqual(r2.indirectArticles);
     });
   });
 });

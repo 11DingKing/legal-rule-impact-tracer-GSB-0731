@@ -11,6 +11,8 @@ export * from './models/revision-graph';
 export * from './ports/graph-input';
 export * from './errors/domain-errors';
 export * from './services/graph-builder';
+export * from './services/graph-neighbors';
 export * from './services/path-tracer';
+export * from './services/shortest-path-calculator';
 export * from './services/impact-analyzer';
 export * from './services/snapshot-factory';

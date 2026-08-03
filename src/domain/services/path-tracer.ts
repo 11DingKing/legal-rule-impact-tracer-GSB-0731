@@ -1,7 +1,7 @@
 import { ArticleStableId } from '../models/branded-types';
-import { EdgeKind } from '../models/enums';
 import { PathHop, PropagationPath } from '../models/propagation-path';
 import { ReadOnlyRevisionGraph } from '../models/revision-graph';
+import { getOrderedNeighbors } from './graph-neighbors';
 
 export interface TraceSeed {
   readonly articleId: ArticleStableId;
@@ -47,7 +47,7 @@ export class PathTracer {
       });
     }
 
-    const neighbors = this.getOrderedNeighbors(graph, current);
+    const neighbors = getOrderedNeighbors(graph, current);
 
     for (const neighbor of neighbors) {
       if (visited.has(neighbor.id)) {
@@ -72,46 +72,6 @@ export class PathTracer {
       currentHops.pop();
       visited.delete(neighbor.id);
     }
-  }
-
-  private getOrderedNeighbors(
-    graph: ReadOnlyRevisionGraph,
-    articleId: ArticleStableId,
-  ): { id: ArticleStableId; edgeKind: EdgeKind; detail: string }[] {
-    const neighbors: {
-      id: ArticleStableId;
-      edgeKind: EdgeKind;
-      detail: string;
-    }[] = [];
-
-    const successionEdges = graph.getSuccessionsFrom(articleId);
-    for (const edge of successionEdges) {
-      for (const toId of edge.toStableIds) {
-        neighbors.push({
-          id: toId,
-          edgeKind: EdgeKind.SUCCESSION,
-          detail: `${edge.kind}: ${articleId} -> ${toId}`,
-        });
-      }
-    }
-
-    const reverseRefs = graph.getReverseReferences(articleId);
-    for (const refId of reverseRefs) {
-      neighbors.push({
-        id: refId,
-        edgeKind: EdgeKind.CROSS_REFERENCE,
-        detail: `${refId} references ${articleId}`,
-      });
-    }
-
-    neighbors.sort((a, b) => {
-      if (a.edgeKind !== b.edgeKind) {
-        return a.edgeKind.localeCompare(b.edgeKind);
-      }
-      return a.id.localeCompare(b.id);
-    });
-
-    return neighbors;
   }
 
   private deduplicatePaths(

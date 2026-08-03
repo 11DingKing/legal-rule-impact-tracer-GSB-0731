@@ -123,6 +123,45 @@ export function sameDayVersionsGraphInput(): RevisionGraphInput {
   };
 }
 
+export function draft2GraphInput(): RevisionGraphInput {
+  return {
+    versions: [
+      { id: vid('LAW-V1'), status: VersionStatus.EFFECTIVE, effectiveFrom: '2026-01-01' },
+      { id: vid('LAW-DRAFT-2'), status: VersionStatus.DRAFT, effectiveFrom: null },
+      { id: vid('LAW-V2'), status: VersionStatus.PUBLISHED, effectiveFrom: '2027-01-01' },
+    ],
+    articles: [
+      { stableId: aid('ART-A'), version: vid('LAW-V1'), label: '第十条', references: [] },
+      { stableId: aid('ART-B'), version: vid('LAW-V1'), label: '第十一条', references: [aid('ART-A')] },
+      { stableId: aid('ART-C'), version: vid('LAW-V1'), label: '第十二条', references: [aid('ART-A'), aid('ART-B')] },
+      { stableId: aid('ART-D'), version: vid('LAW-V1'), label: '第十三条', references: [] },
+      { stableId: aid('ART-E'), version: vid('LAW-V1'), label: '第十四条', references: [aid('ART-D')] },
+      { stableId: aid('ART-A1'), version: vid('LAW-DRAFT-2'), label: '草案第十条之一', references: [] },
+      { stableId: aid('ART-A2'), version: vid('LAW-DRAFT-2'), label: '草案第十条之二', references: [] },
+      { stableId: aid('ART-M'), version: vid('LAW-DRAFT-2'), label: '草案合并条', references: [] },
+      { stableId: aid('ART-C1'), version: vid('LAW-DRAFT-2'), label: '草案第十二条', references: [aid('ART-A1'), aid('ART-M')] },
+      { stableId: aid('ART-E1'), version: vid('LAW-DRAFT-2'), label: '草案第十四条', references: [] },
+      { stableId: aid('ART-F'), version: vid('LAW-DRAFT-2'), label: '草案新增交叉条', references: [aid('ART-A1'), aid('ART-M')] },
+    ],
+    succession: [
+      { from: aid('ART-A'), to: [aid('ART-A1'), aid('ART-A2')], kind: SuccessionKind.SPLIT },
+      { from: aid('ART-A'), to: [aid('ART-M')], kind: SuccessionKind.MERGE },
+      { from: aid('ART-B'), to: [aid('ART-M')], kind: SuccessionKind.MERGE },
+      { from: aid('ART-C'), to: [aid('ART-C1')], kind: SuccessionKind.REVISE },
+      { from: aid('ART-E'), to: [aid('ART-E1')], kind: SuccessionKind.REVISE },
+    ],
+    bindings: [
+      { ruleId: rid('RULE-DIR-01'), articleIds: [aid('ART-A')] },
+      { ruleId: rid('RULE-MERGE-02'), articleIds: [aid('ART-B')] },
+      { ruleId: rid('RULE-REF-03'), articleIds: [aid('ART-F')] },
+      { ruleId: rid('RULE-MISSING-04'), articleIds: [aid('ART-D')] },
+      { ruleId: rid('RULE-REF-D-05'), articleIds: [aid('ART-E')] },
+      { ruleId: rid('RULE-DRAFT-06'), articleIds: [aid('ART-A1'), aid('ART-M')] },
+      { ruleId: rid('RULE-CARRY-07'), articleIds: [aid('ART-C1')] },
+    ],
+  };
+}
+
 export function largeGraphInput(size: number): RevisionGraphInput {
   const versions = [
     { id: vid('V1'), status: VersionStatus.EFFECTIVE, effectiveFrom: '2026-01-01' },

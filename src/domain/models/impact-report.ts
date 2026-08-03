@@ -19,6 +19,14 @@ export interface RuleImpact {
   readonly boundArticleIds: readonly ArticleStableId[];
 }
 
+export interface RuleWitness {
+  readonly ruleId: RuleId;
+  readonly level: ImpactLevel;
+  readonly shortestDistance: number;
+  readonly equalLengthPathCount: number;
+  readonly witness: PropagationPath;
+}
+
 export interface MissingSuccession {
   readonly stableId: ArticleStableId;
   readonly label: string;
@@ -37,6 +45,7 @@ export interface ImpactReport {
   readonly directRules: readonly RuleImpact[];
   readonly indirectRules: readonly RuleImpact[];
   readonly unaffectedRules: readonly RuleImpact[];
+  readonly ruleWitnesses: readonly RuleWitness[];
   readonly missingSuccessions: readonly MissingSuccession[];
   readonly paths: readonly PropagationPath[];
 }
