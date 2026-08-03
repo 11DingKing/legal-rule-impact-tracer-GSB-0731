@@ -89,6 +89,8 @@ export interface ArticleImpact {
   readonly label: string;
   readonly level: ImpactLevel;
   readonly paths: ReadonlyArray<PropagationPath>;
+  readonly shortestWitness: PropagationPath | null;
+  readonly equalLengthWitnessCount: number;
 }
 
 export interface RuleImpact {
@@ -96,6 +98,8 @@ export interface RuleImpact {
   readonly level: ImpactLevel;
   readonly articleKeys: ReadonlyArray<ArticleKey>;
   readonly paths: ReadonlyArray<PropagationPath>;
+  readonly shortestWitness: PropagationPath | null;
+  readonly equalLengthWitnessCount: number;
 }
 
 export interface MissingSuccession {

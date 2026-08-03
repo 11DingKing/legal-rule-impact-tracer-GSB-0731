@@ -25,6 +25,17 @@ The service is built around three hard rules:
 - SQLite via `better-sqlite3`
 - Jest + ts-jest + supertest
 
+For every affected article and rule the result carries:
+
+- `shortestWitness` — a single canonical shortest propagation path (lexicographically
+  smallest node sequence); `null` for unaffected items; a single-node path for seeds.
+- `equalLengthWitnessCount` — the total number of distinct shortest propagation
+  paths, computed with dynamic programming over the shortest-path DAG (capped at
+  1 000 000; when saturated, `truncated: true` is returned).
+
+These fields make it possible to keep a compact witness while still knowing how
+many equal-length witnesses exist without enumerating them.
+
 ## Layout
 
 ```
@@ -296,6 +307,18 @@ Covers:
 - Pure domain: split, merge, cycles, missing succession, large-graph path
   dedup and ordering, snapshot immutability, snapshot isolation after later
   imports, no label-based guessing, same-day version ordering.
+- `LAW-DRAFT-2` fixture (`materials/law-draft-2.json`): one stable ID
+  participates in a one-to-many split while two other IDs merge into a new
+  article; one deliberately missing succession edge (`ART-Z`); a `G ↔ H`
+  cross-reference cycle; direct / indirect / unaffected rules; each affected
+  rule carries a `shortestWitness` and `equalLengthWitnessCount`.
+- Determinism: the LAW-DRAFT-2 scenario is executed (a) with records in the
+  imported order, (b) with every array reversed, and (c) duplicated — at both
+  the pure-domain level and through the NestJS + SQLite stack. Direct/indirect
+  key sets, affected-rule witnesses/counts, and missing-succession diagnostics
+  are byte-for-byte identical across all three. Adding an isolated cyclic
+  subgraph that contains no succession into the target version also leaves the
+  affected output unchanged.
 - Service/integration: idempotent import, DIRECT/INDIRECT/UNAFFECTED
   computation, snapshot persistence and replay, unknown version errors,
   same-day version ordinal.

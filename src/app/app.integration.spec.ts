@@ -151,20 +151,20 @@ describe('same-day multiple versions', () => {
         { id: 'V-E', status: 'EFFECTIVE', effectiveFrom: '2027-01-01' },
       ],
       articles: [
-        { stableId: 'A', version: 'V-E', label: 'A' },
-        { stableId: 'A2', version: 'V-B', label: 'A2' },
+        { stableId: 'A', version: 'V-D', label: 'A' },
+        { stableId: 'A2', version: 'V-E', label: 'A2' },
       ],
       succession: [{ from: 'A', to: 'A2', kind: 'REPLACE' }],
       bindings: [],
     });
 
     const { result } = q.queryImpact({
-      fromVersionId: 'V-E',
-      toVersionId: 'V-B',
+      fromVersionId: 'V-D',
+      toVersionId: 'V-E',
       queryAt: '2026-08-01T00:00:00.000Z',
     });
     expect(result.directKeys).toEqual(
-      expect.arrayContaining(['A@V-E', 'A2@V-B']),
+      expect.arrayContaining(['A@V-D', 'A2@V-E']),
     );
     await app2.close();
   });

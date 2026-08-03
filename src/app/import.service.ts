@@ -20,14 +20,12 @@ export class ImportService {
     const refs = extractReferences(articles);
     this.repo.importReferences(refs);
 
-    this.repo.importSuccessions(succession);
+    const sResult = this.repo.importSuccessions(succession);
     const bResult = this.repo.importBindings(bindings);
 
     const danglingReferences = refs
       .filter((r) => {
-        const found = articles.find(
-          (a) => a.stableId === r.toStableId,
-        );
+        const found = articles.some((a) => a.stableId === r.toStableId);
         return !found;
       })
       .map((r) => ({
@@ -45,21 +43,24 @@ export class ImportService {
       const toList = Array.isArray(s.to) ? s.to : [s.to];
       const missing: string[] = [];
       for (const id of [...fromList, ...toList]) {
-        if (!articles.find((a) => a.stableId === id)) missing.push(id);
+        if (!articles.some((a) => a.stableId === id)) missing.push(id);
       }
       if (missing.length > 0) {
-        unresolvedEndpoints.push({ succession: s, missing: Object.freeze([...new Set(missing)]) });
+        unresolvedEndpoints.push({
+          succession: s,
+          missing: Object.freeze([...new Set(missing)]),
+        });
       }
     }
 
     return {
       importedVersions: vResult.inserted,
       importedArticles: aResult.inserted,
-      importedSuccessions: succession.length - unresolvedEndpoints.length,
+      importedSuccessions: sResult.inserted,
       importedBindings: bResult.inserted,
       duplicateVersions: vResult.duplicates,
       duplicateArticles: aResult.duplicates,
-      duplicateSuccessions: 0,
+      duplicateSuccessions: sResult.duplicates,
       duplicateBindings: 0,
       danglingReferences: Object.freeze(danglingReferences),
       unresolvedSuccessionEndpoints: Object.freeze(unresolvedEndpoints),

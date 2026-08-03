@@ -23,30 +23,23 @@ CREATE TABLE IF NOT EXISTS article_references (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   from_key TEXT NOT NULL,
   to_stable_id TEXT NOT NULL,
-  to_key TEXT,
-  resolved INTEGER NOT NULL DEFAULT 0,
   UNIQUE(from_key, to_stable_id),
   FOREIGN KEY (from_key) REFERENCES articles(article_key)
 );
 
 CREATE TABLE IF NOT EXISTS successions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  from_key TEXT NOT NULL,
-  to_key TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('SPLIT','MERGE','RENUMBER','REPLACE')),
   from_stable_id TEXT NOT NULL,
   to_stable_id TEXT NOT NULL,
-  UNIQUE(from_key, to_key, kind),
-  FOREIGN KEY (from_key) REFERENCES articles(article_key),
-  FOREIGN KEY (to_key) REFERENCES articles(article_key)
+  kind TEXT NOT NULL CHECK (kind IN ('SPLIT','MERGE','RENUMBER','REPLACE')),
+  UNIQUE(from_stable_id, to_stable_id, kind)
 );
 
 CREATE TABLE IF NOT EXISTS bindings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   rule_id TEXT NOT NULL,
-  article_key TEXT NOT NULL,
-  UNIQUE(rule_id, article_key),
-  FOREIGN KEY (article_key) REFERENCES articles(article_key)
+  article_stable_id TEXT NOT NULL,
+  UNIQUE(rule_id, article_stable_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_bindings_rule ON bindings(rule_id);

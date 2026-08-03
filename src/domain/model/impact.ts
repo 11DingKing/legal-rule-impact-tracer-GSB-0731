@@ -15,6 +15,7 @@ import { parseArticleKey } from './article-key';
 const DEFAULT_MAX_PATH_LENGTH = 24;
 const DEFAULT_MAX_PATHS_PER_TARGET = 16;
 const HARD_PATH_BUDGET = 200_000;
+const MAX_EQUAL_LENGTH_COUNT = 1_000_000;
 
 interface TraversalEdge {
   readonly from: ArticleKey;
@@ -26,6 +27,16 @@ interface TraversalEdge {
 export interface ComputeOptions {
   readonly maxPathLength?: number;
   readonly maxPathsPerTarget?: number;
+}
+
+interface ShortestPathIndex {
+  readonly distance: ReadonlyMap<ArticleKey, number>;
+  readonly count: ReadonlyMap<ArticleKey, number>;
+  readonly dag: ReadonlyMap<ArticleKey, ReadonlyArray<TraversalEdge>>;
+  readonly predecessors: ReadonlyMap<ArticleKey, ReadonlyArray<TraversalEdge>>;
+  readonly reachable: ReadonlySet<ArticleKey>;
+  readonly seeds: ReadonlyArray<ArticleKey>;
+  readonly truncated: boolean;
 }
 
 export function computeImpact(
@@ -44,10 +55,15 @@ export function computeImpact(
   const directKeys = new Set<ArticleKey>(seedKeys);
 
   const traversal = buildTraversalAdjacency(graph);
-  const reachable = findReachable(graph, seedKeys, traversal, maxPathLength);
+  const index = buildShortestPathIndex(
+    graph,
+    seedKeys,
+    traversal,
+    maxPathLength,
+  );
 
   const indirectKeys = new Set<ArticleKey>();
-  for (const k of reachable) {
+  for (const k of index.reachable) {
     if (!directKeys.has(k)) indirectKeys.add(k);
   }
 
@@ -58,11 +74,8 @@ export function computeImpact(
   }
 
   const pathMap = enumerateShortestPaths(
-    seedKeys,
-    reachable,
+    index,
     directKeys,
-    traversal,
-    maxPathLength,
     maxPathsPerTarget,
   );
 
@@ -71,12 +84,18 @@ export function computeImpact(
     directKeys,
     indirectKeys,
     pathMap,
+    index,
   );
 
-  const ruleImpacts = buildRuleImpacts(graph, directKeys, indirectKeys, pathMap);
+  const ruleImpacts = buildRuleImpacts(
+    graph,
+    directKeys,
+    indirectKeys,
+    pathMap,
+    index,
+  );
 
   const missing = detectMissingSuccession(graph, query);
-
   const dangling: ReadonlyArray<DanglingReference> = graph.danglingReferences;
 
   return {
@@ -88,7 +107,7 @@ export function computeImpact(
     unaffectedKeys: Object.freeze([...unaffectedKeys].sort()),
     missingSuccession: missing,
     danglingReferences: dangling,
-    truncated: pathMap.truncated,
+    truncated: pathMap.truncated || index.truncated,
   };
 }
 
@@ -138,40 +157,113 @@ function buildTraversalAdjacency(
   }
 
   for (const list of adj.values()) {
-    list.sort((a, b) => {
-      if (a.to !== b.to) return a.to < b.to ? -1 : 1;
-      if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
-      return a.detail < b.detail ? -1 : a.detail > b.detail ? 1 : 0;
-    });
+    list.sort(compareTraversalEdges);
   }
   return adj;
 }
 
-function findReachable(
+function compareTraversalEdges(a: TraversalEdge, b: TraversalEdge): number {
+  if (a.to !== b.to) return a.to < b.to ? -1 : 1;
+  if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
+  if (a.detail !== b.detail) return a.detail < b.detail ? -1 : a.detail > b.detail ? 1 : 0;
+  if (a.from !== b.from) return a.from < b.from ? -1 : 1;
+  return 0;
+}
+
+function buildShortestPathIndex(
   graph: BuiltGraph,
   seeds: ReadonlyArray<ArticleKey>,
   adj: ReadonlyMap<ArticleKey, ReadonlyArray<TraversalEdge>>,
   maxLen: number,
-): Set<ArticleKey> {
-  const reachable = new Set<ArticleKey>(seeds);
-  const dist = new Map<ArticleKey, number>();
-  for (const s of seeds) dist.set(s, 0);
+): ShortestPathIndex {
+  const distance = new Map<ArticleKey, number>();
+  for (const s of seeds) distance.set(s, 0);
+
+  const dag = new Map<ArticleKey, TraversalEdge[]>();
+  const predecessors = new Map<ArticleKey, TraversalEdge[]>();
+  let truncated = false;
+
   const queue: ArticleKey[] = [...seeds];
+  const reachable = new Set<ArticleKey>(seeds);
+
   while (queue.length > 0) {
     const current = queue.shift() as ArticleKey;
-    const d = dist.get(current) ?? 0;
+    const d = distance.get(current) ?? 0;
     if (d >= maxLen) continue;
     const edges = adj.get(current);
     if (!edges) continue;
+
     for (const e of edges) {
-      if (reachable.has(e.to)) continue;
       if (!graph.articlesByKey.has(e.to)) continue;
-      reachable.add(e.to);
-      dist.set(e.to, d + 1);
-      queue.push(e.to);
+      const existing = distance.get(e.to);
+      if (existing === undefined) {
+        distance.set(e.to, d + 1);
+        reachable.add(e.to);
+        addDagEdge(dag, current, e);
+        addPredecessor(predecessors, e.to, e);
+        queue.push(e.to);
+      } else if (existing === d + 1) {
+        addDagEdge(dag, current, e);
+        addPredecessor(predecessors, e.to, e);
+      }
     }
   }
-  return reachable;
+
+  const count = new Map<ArticleKey, number>();
+  for (const s of seeds) count.set(s, 1);
+
+  const orderedByDistance: ArticleKey[] = [...reachable].sort((a, b) => {
+    const da = distance.get(a) ?? 0;
+    const db = distance.get(b) ?? 0;
+    if (da !== db) return da - db;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+
+  for (const node of orderedByDistance) {
+    if (distance.get(node) === 0) continue;
+    const preds = predecessors.get(node) ?? [];
+    let total = 0;
+    for (const p of preds) {
+      const c = count.get(p.from) ?? 0;
+      total += c;
+      if (total > MAX_EQUAL_LENGTH_COUNT) {
+        total = MAX_EQUAL_LENGTH_COUNT;
+        truncated = true;
+        break;
+      }
+    }
+    count.set(node, total);
+  }
+
+  return {
+    distance,
+    count,
+    dag,
+    predecessors,
+    reachable,
+    seeds,
+    truncated,
+  };
+}
+
+function addDagEdge(
+  dag: Map<ArticleKey, TraversalEdge[]>,
+  from: ArticleKey,
+  edge: TraversalEdge,
+): void {
+  const list = dag.get(from);
+  if (list) list.push(edge);
+  else dag.set(from, [edge]);
+}
+
+function addPredecessor(
+  predecessors: Map<ArticleKey, TraversalEdge[]>,
+  to: ArticleKey,
+  edge: TraversalEdge,
+): void {
+  const list = predecessors.get(to);
+  if (list) list.push(edge);
+  else predecessors.set(to, [edge]);
 }
 
 interface PathEnumerationResult {
@@ -180,39 +272,39 @@ interface PathEnumerationResult {
 }
 
 function enumerateShortestPaths(
-  seeds: ReadonlyArray<ArticleKey>,
-  reachable: ReadonlySet<ArticleKey>,
+  index: ShortestPathIndex,
   direct: ReadonlySet<ArticleKey>,
-  adj: ReadonlyMap<ArticleKey, ReadonlyArray<TraversalEdge>>,
-  maxLen: number,
   maxPathsPerTarget: number,
 ): PathEnumerationResult {
   const result = new Map<ArticleKey, PropagationPath[]>();
   let truncated = false;
   let totalBudget = HARD_PATH_BUDGET;
 
-  for (const seed of seeds) {
-    const seedPath: PropagationPath = {
-      nodes: Object.freeze([seed]),
-      edges: Object.freeze([]),
-      length: 0,
-    };
+  for (const seed of index.seeds) {
+    const seedPath: PropagationPath = freezePath([seed], []);
     pushPath(result, seed, seedPath);
   }
 
-  const distances = computeShortestDistances(seeds, adj, maxLen);
+  const targets: ArticleKey[] = [];
+  for (const k of index.reachable) {
+    if (!direct.has(k)) targets.push(k);
+  }
+  targets.sort();
 
-  for (const target of reachable) {
-    if (direct.has(target)) continue;
-    const targetDist = distances.get(target);
+  for (const target of targets) {
+    const targetDist = index.distance.get(target);
     if (targetDist === undefined) continue;
 
     const paths: PropagationPath[] = [];
-    const stack: { node: ArticleKey; pathNodes: ArticleKey[]; pathEdges: EdgeKind[]; depth: number }[] = [];
-    for (const seed of seeds) {
-      if (distances.get(seed) === 0) {
-        stack.push({ node: seed, pathNodes: [seed], pathEdges: [], depth: 0 });
-      }
+    const stack: {
+      node: ArticleKey;
+      pathNodes: ArticleKey[];
+      pathEdges: EdgeKind[];
+      depth: number;
+    }[] = [];
+
+    for (const seed of index.seeds) {
+      stack.push({ node: seed, pathNodes: [seed], pathEdges: [], depth: 0 });
     }
 
     while (stack.length > 0) {
@@ -230,27 +322,19 @@ function enumerateShortestPaths(
       };
 
       if (frame.node === target) {
-        paths.push({
-          nodes: Object.freeze([...frame.pathNodes]),
-          edges: Object.freeze([...frame.pathEdges]),
-          length: frame.depth,
-        });
+        paths.push(freezePath(frame.pathNodes, frame.pathEdges));
         if (paths.length >= maxPathsPerTarget) break;
         continue;
       }
 
       if (frame.depth >= targetDist) continue;
 
-      const edges = adj.get(frame.node);
-      if (!edges) continue;
+      const dagEdges = index.dag.get(frame.node);
+      if (!dagEdges) continue;
 
-      for (let i = edges.length - 1; i >= 0; i--) {
-        const e = edges[i];
+      for (let i = dagEdges.length - 1; i >= 0; i--) {
+        const e = dagEdges[i];
         if (frame.pathNodes.includes(e.to)) continue;
-        const nextDist = distances.get(e.to);
-        if (nextDist === undefined) continue;
-        if (nextDist !== frame.depth + 1) continue;
-        if (frame.depth + 1 > targetDist) continue;
         stack.push({
           node: e.to,
           pathNodes: [...frame.pathNodes, e.to],
@@ -260,38 +344,20 @@ function enumerateShortestPaths(
       }
     }
 
+    if (paths.length > maxPathsPerTarget) truncated = true;
     const canonical = dedupAndSortPaths(paths).slice(0, maxPathsPerTarget);
-    if (paths.length > canonical.length) truncated = true;
     result.set(target, canonical);
   }
 
-  return {
-    paths: result,
-    truncated,
-  };
+  return { paths: result, truncated };
 }
 
-function computeShortestDistances(
-  seeds: ReadonlyArray<ArticleKey>,
-  adj: ReadonlyMap<ArticleKey, ReadonlyArray<TraversalEdge>>,
-  maxLen: number,
-): ReadonlyMap<ArticleKey, number> {
-  const dist = new Map<ArticleKey, number>();
-  for (const s of seeds) dist.set(s, 0);
-  const queue: ArticleKey[] = [...seeds];
-  while (queue.length > 0) {
-    const current = queue.shift() as ArticleKey;
-    const d = dist.get(current) ?? 0;
-    if (d >= maxLen) continue;
-    const edges = adj.get(current);
-    if (!edges) continue;
-    for (const e of edges) {
-      if (dist.has(e.to)) continue;
-      dist.set(e.to, d + 1);
-      queue.push(e.to);
-    }
-  }
-  return dist;
+function freezePath(nodes: ArticleKey[], edges: EdgeKind[]): PropagationPath {
+  return Object.freeze({
+    nodes: Object.freeze(nodes),
+    edges: Object.freeze(edges),
+    length: nodes.length - 1,
+  });
 }
 
 function dedupAndSortPaths(paths: PropagationPath[]): PropagationPath[] {
@@ -303,21 +369,23 @@ function dedupAndSortPaths(paths: PropagationPath[]): PropagationPath[] {
     seen.add(key);
     out.push(p);
   }
-  out.sort((a, b) => {
-    if (a.length !== b.length) return a.length - b.length;
-    for (let i = 0; i < a.nodes.length; i++) {
-      const na = a.nodes[i] ?? '';
-      const nb = b.nodes[i] ?? '';
-      if (na !== nb) return na < nb ? -1 : 1;
-    }
-    for (let i = 0; i < a.edges.length; i++) {
-      const ea = a.edges[i] ?? '';
-      const eb = b.edges[i] ?? '';
-      if (ea !== eb) return ea < eb ? -1 : 1;
-    }
-    return 0;
-  });
+  out.sort(comparePropagationPaths);
   return out;
+}
+
+function comparePropagationPaths(a: PropagationPath, b: PropagationPath): number {
+  if (a.length !== b.length) return a.length - b.length;
+  for (let i = 0; i < a.nodes.length; i++) {
+    const na = a.nodes[i] ?? '';
+    const nb = b.nodes[i] ?? '';
+    if (na !== nb) return na < nb ? -1 : 1;
+  }
+  for (let i = 0; i < a.edges.length; i++) {
+    const ea = a.edges[i] ?? '';
+    const eb = b.edges[i] ?? '';
+    if (ea !== eb) return ea < eb ? -1 : 1;
+  }
+  return 0;
 }
 
 function pushPath(
@@ -335,6 +403,7 @@ function buildArticleImpacts(
   direct: ReadonlySet<ArticleKey>,
   indirect: ReadonlySet<ArticleKey>,
   pathMap: PathEnumerationResult,
+  index: ShortestPathIndex,
 ): ReadonlyArray<ArticleImpact> {
   const out: ArticleImpact[] = [];
   for (const article of graph.articlesByKey.values()) {
@@ -346,6 +415,8 @@ function buildArticleImpacts(
     const paths = level === 'UNAFFECTED'
       ? Object.freeze([])
       : Object.freeze(pathMap.paths.get(article.key) ?? []);
+    const witness = selectWitness(article.key, paths, index, direct);
+    const count = level === 'UNAFFECTED' ? 0 : (index.count.get(article.key) ?? 0);
 
     out.push({
       key: article.key,
@@ -354,10 +425,52 @@ function buildArticleImpacts(
       label: article.label,
       level,
       paths,
+      shortestWitness: witness,
+      equalLengthWitnessCount: count,
     });
   }
   out.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   return Object.freeze(out);
+}
+
+function selectWitness(
+  key: ArticleKey,
+  paths: ReadonlyArray<PropagationPath>,
+  index: ShortestPathIndex,
+  direct: ReadonlySet<ArticleKey>,
+): PropagationPath | null {
+  if (paths.length > 0) return paths[0] ?? null;
+  if (direct.has(key)) {
+    return Object.freeze({
+      nodes: Object.freeze([key]),
+      edges: Object.freeze([]),
+      length: 0,
+    });
+  }
+  if (!index.distance.has(key)) return null;
+  return deriveLexicographicallySmallestPath(key, index);
+}
+
+function deriveLexicographicallySmallestPath(
+  target: ArticleKey,
+  index: ShortestPathIndex,
+): PropagationPath {
+  const dist = index.distance.get(target) ?? 0;
+  const nodes: ArticleKey[] = new Array(dist + 1);
+  const edges: EdgeKind[] = new Array(dist);
+  let current: ArticleKey = target;
+  let remaining = dist;
+  while (remaining > 0) {
+    nodes[remaining] = current;
+    const preds = index.predecessors.get(current) ?? [];
+    const chosen = [...preds].sort(compareTraversalEdges)[0];
+    if (!chosen) break;
+    edges[remaining - 1] = chosen.kind;
+    current = chosen.from;
+    remaining--;
+  }
+  nodes[0] = current;
+  return freezePath(nodes, edges);
 }
 
 function buildRuleImpacts(
@@ -365,6 +478,7 @@ function buildRuleImpacts(
   direct: ReadonlySet<ArticleKey>,
   indirect: ReadonlySet<ArticleKey>,
   pathMap: PathEnumerationResult,
+  index: ShortestPathIndex,
 ): ReadonlyArray<RuleImpact> {
   const out: RuleImpact[] = [];
   for (const rule of graph.rules.values()) {
@@ -386,15 +500,74 @@ function buildRuleImpacts(
       const p = pathMap.paths.get(k);
       if (p) paths.push(...p);
     }
+    const canonical = dedupAndSortPaths(paths);
+    const witness = pickRuleWitness(level, directArticles, indirectArticles, canonical, index);
+    const count = computeRuleWitnessCount(level, directArticles, indirectArticles, index);
+
     out.push({
       ruleId: rule.ruleId,
       level,
       articleKeys: Object.freeze(affected),
-      paths: Object.freeze(dedupAndSortPaths(paths)),
+      paths: Object.freeze(canonical),
+      shortestWitness: witness,
+      equalLengthWitnessCount: count,
     });
   }
   out.sort((a, b) => (a.ruleId < b.ruleId ? -1 : a.ruleId > b.ruleId ? 1 : 0));
   return Object.freeze(out);
+}
+
+function pickRuleWitness(
+  level: 'DIRECT' | 'INDIRECT' | 'UNAFFECTED',
+  directArticles: ReadonlyArray<ArticleKey>,
+  indirectArticles: ReadonlyArray<ArticleKey>,
+  paths: ReadonlyArray<PropagationPath>,
+  index: ShortestPathIndex,
+): PropagationPath | null {
+  if (level === 'UNAFFECTED') return null;
+  if (paths.length > 0) return paths[0] ?? null;
+  if (level === 'DIRECT' && directArticles.length > 0) {
+    const first = [...directArticles].sort()[0] as ArticleKey;
+    return Object.freeze({
+      nodes: Object.freeze([first]),
+      edges: Object.freeze([]),
+      length: 0,
+    });
+  }
+  const candidates = indirectArticles.length > 0 ? indirectArticles : directArticles;
+  if (candidates.length === 0) return null;
+  let best: PropagationPath | null = null;
+  for (const k of candidates) {
+    const p = deriveLexicographicallySmallestPath(k, index);
+    if (!best || comparePropagationPaths(p, best) < 0) best = p;
+  }
+  return best;
+}
+
+function computeRuleWitnessCount(
+  level: 'DIRECT' | 'INDIRECT' | 'UNAFFECTED',
+  directArticles: ReadonlyArray<ArticleKey>,
+  indirectArticles: ReadonlyArray<ArticleKey>,
+  index: ShortestPathIndex,
+): number {
+  if (level === 'UNAFFECTED') return 0;
+  if (level === 'DIRECT') {
+    let total = 0;
+    for (const k of directArticles) total += index.count.get(k) ?? 0;
+    return Math.min(total, MAX_EQUAL_LENGTH_COUNT);
+  }
+  let total = 0;
+  const minDist = Math.min(
+    ...[...directArticles, ...indirectArticles].map(
+      (k) => index.distance.get(k) ?? Number.MAX_SAFE_INTEGER,
+    ),
+  );
+  for (const k of [...directArticles, ...indirectArticles]) {
+    if ((index.distance.get(k) ?? Number.MAX_SAFE_INTEGER) === minDist) {
+      total += index.count.get(k) ?? 0;
+    }
+  }
+  return Math.min(total, MAX_EQUAL_LENGTH_COUNT);
 }
 
 function detectMissingSuccession(
@@ -424,6 +597,7 @@ function detectMissingSuccession(
   for (const [stableId, list] of graph.articlesByStable.entries()) {
     const inFrom = list.some((a: { versionId: string }) => a.versionId === query.fromVersionId);
     const inTo = list.some((a: { versionId: string }) => a.versionId === query.toVersionId);
+    if (inFrom && inTo) continue;
     if (inFrom && !inTo && !coveredFromStable.has(stableId)) {
       out.push({
         stableId,

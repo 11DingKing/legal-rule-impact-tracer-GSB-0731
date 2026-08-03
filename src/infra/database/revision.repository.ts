@@ -3,10 +3,12 @@ import type {
   ArticleInput,
   BindingInput,
   SuccessionInput,
+  SuccessionKind,
   VersionInput,
+  VersionStatus,
 } from '../../domain';
-import { DatabaseService } from './database.service';
 import { makeArticleKey } from '../../domain';
+import { DatabaseService } from './database.service';
 
 interface VersionRow {
   id: string;
@@ -25,21 +27,17 @@ interface ArticleRow {
 interface ReferenceRow {
   from_key: string;
   to_stable_id: string;
-  to_key: string | null;
-  resolved: number;
 }
 
 interface SuccessionRow {
-  from_key: string;
-  to_key: string;
-  kind: string;
   from_stable_id: string;
   to_stable_id: string;
+  kind: string;
 }
 
 interface BindingRow {
   rule_id: string;
-  article_key: string;
+  article_stable_id: string;
 }
 
 @Injectable()
@@ -55,19 +53,19 @@ export class RevisionRepository {
       `INSERT OR IGNORE INTO versions (id, status, effective_from, ordinal)
        VALUES (?, ?, ?, ?)`,
     );
-    const countBefore = db
-      .prepare(`SELECT COUNT(*) as c FROM versions`)
-      .get() as { c: number };
+    const countBefore = (
+      db.prepare(`SELECT COUNT(*) as c FROM versions`).get() as { c: number }
+    ).c;
     const tx = db.transaction((rows: ReadonlyArray<VersionInput>) => {
       for (const v of rows) {
         insert.run(v.id, v.status, v.effectiveFrom, ordinals.get(v.id) ?? 0);
       }
     });
     tx(versions);
-    const countAfter = db
-      .prepare(`SELECT COUNT(*) as c FROM versions`)
-      .get() as { c: number };
-    const inserted = countAfter.c - countBefore.c;
+    const countAfter = (
+      db.prepare(`SELECT COUNT(*) as c FROM versions`).get() as { c: number }
+    ).c;
+    const inserted = countAfter - countBefore;
     return { inserted, duplicates: versions.length - inserted };
   }
 
@@ -79,9 +77,9 @@ export class RevisionRepository {
       `INSERT OR IGNORE INTO articles (stable_id, version_id, label, article_key)
        VALUES (?, ?, ?, ?)`,
     );
-    const countBefore = db
-      .prepare(`SELECT COUNT(*) as c FROM articles`)
-      .get() as { c: number };
+    const countBefore = (
+      db.prepare(`SELECT COUNT(*) as c FROM articles`).get() as { c: number }
+    ).c;
     const tx = db.transaction((rows: ReadonlyArray<ArticleInput>) => {
       for (const a of rows) {
         const key = makeArticleKey(a.stableId, a.version);
@@ -89,10 +87,10 @@ export class RevisionRepository {
       }
     });
     tx(articles);
-    const countAfter = db
-      .prepare(`SELECT COUNT(*) as c FROM articles`)
-      .get() as { c: number };
-    const inserted = countAfter.c - countBefore.c;
+    const countAfter = (
+      db.prepare(`SELECT COUNT(*) as c FROM articles`).get() as { c: number }
+    ).c;
+    const inserted = countAfter - countBefore;
     return { inserted, duplicates: articles.length - inserted };
   }
 
@@ -101,13 +99,17 @@ export class RevisionRepository {
       readonly fromKey: string;
       readonly toStableId: string;
     }>,
-  ): { inserted: number; duplicates: number; unresolved: number } {
+  ): { inserted: number; duplicates: number } {
     const db = this.dbService.getDb();
     const insert = db.prepare(
-      `INSERT OR IGNORE INTO article_references (from_key, to_stable_id, to_key, resolved)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO article_references (from_key, to_stable_id)
+       VALUES (?, ?)`,
     );
-    let unresolved = 0;
+    const countBefore = (
+      db.prepare(`SELECT COUNT(*) as c FROM article_references`).get() as {
+        c: number;
+      }
+    ).c;
     const tx = db.transaction(
       (
         rows: ReadonlyArray<{
@@ -115,60 +117,51 @@ export class RevisionRepository {
           readonly toStableId: string;
         }>,
       ) => {
-        for (const r of rows) {
-          const target = db
-            .prepare(
-              `SELECT article_key FROM articles WHERE stable_id = ? ORDER BY version_id DESC LIMIT 1`,
-            )
-            .get(r.toStableId) as { article_key: string } | undefined;
-          if (!target) unresolved++;
-          insert.run(r.fromKey, r.toStableId, target?.article_key ?? null, target ? 1 : 0);
-        }
+        for (const r of rows) insert.run(r.fromKey, r.toStableId);
       },
     );
     tx(references);
-    return { inserted: references.length - unresolved, duplicates: 0, unresolved };
+    const countAfter = (
+      db.prepare(`SELECT COUNT(*) as c FROM article_references`).get() as {
+        c: number;
+      }
+    ).c;
+    return {
+      inserted: countAfter - countBefore,
+      duplicates: references.length - (countAfter - countBefore),
+    };
   }
 
   importSuccessions(
     successions: ReadonlyArray<SuccessionInput>,
-  ): { inserted: number; duplicates: number; unresolved: ReadonlyArray<string> } {
+  ): { inserted: number; duplicates: number } {
     const db = this.dbService.getDb();
     const insert = db.prepare(
-      `INSERT OR IGNORE INTO successions (from_key, to_key, kind, from_stable_id, to_stable_id)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO successions (from_stable_id, to_stable_id, kind)
+       VALUES (?, ?, ?)`,
     );
-    const unresolved: string[] = [];
+    const countBefore = (
+      db.prepare(`SELECT COUNT(*) as c FROM successions`).get() as { c: number }
+    ).c;
+    const totalPairs = { value: 0 };
     const tx = db.transaction((rows: ReadonlyArray<SuccessionInput>) => {
       for (const s of rows) {
         const fromList = Array.isArray(s.from) ? s.from : [s.from];
         const toList = Array.isArray(s.to) ? s.to : [s.to];
         for (const f of fromList) {
           for (const t of toList) {
-            const fRow = db
-              .prepare(
-                `SELECT article_key FROM articles WHERE stable_id = ? ORDER BY version_id DESC LIMIT 1`,
-              )
-              .get(f) as { article_key: string } | undefined;
-            const tRow = db
-              .prepare(
-                `SELECT article_key FROM articles WHERE stable_id = ? ORDER BY version_id DESC LIMIT 1`,
-              )
-              .get(t) as { article_key: string } | undefined;
-            if (!fRow || !tRow) {
-              const missing: string[] = [];
-              if (!fRow) missing.push(f);
-              if (!tRow) missing.push(t);
-              unresolved.push(...missing);
-              continue;
-            }
-            insert.run(fRow.article_key, tRow.article_key, s.kind, f, t);
+            totalPairs.value++;
+            insert.run(f, t, s.kind);
           }
         }
       }
     });
     tx(successions);
-    return { inserted: 0, duplicates: 0, unresolved: Object.freeze(unresolved) };
+    const countAfter = (
+      db.prepare(`SELECT COUNT(*) as c FROM successions`).get() as { c: number }
+    ).c;
+    const inserted = countAfter - countBefore;
+    return { inserted, duplicates: totalPairs.value - inserted };
   }
 
   importBindings(
@@ -176,64 +169,124 @@ export class RevisionRepository {
   ): { inserted: number; duplicates: number } {
     const db = this.dbService.getDb();
     const insert = db.prepare(
-      `INSERT OR IGNORE INTO bindings (rule_id, article_key)
-       SELECT ?, article_key FROM articles WHERE stable_id = ?
-       ORDER BY version_id DESC LIMIT 1`,
+      `INSERT OR IGNORE INTO bindings (rule_id, article_stable_id)
+       VALUES (?, ?)`,
     );
-    let inserted = 0;
-    const countStmt = db.prepare(`SELECT changes() as c`);
+    const countBefore = (
+      db.prepare(`SELECT COUNT(*) as c FROM bindings`).get() as { c: number }
+    ).c;
     const tx = db.transaction((rows: ReadonlyArray<BindingInput>) => {
       for (const b of rows) {
-        for (const aid of b.articleIds) {
-          insert.run(b.ruleId, aid);
-          const r = countStmt.get() as { c: number };
-          inserted += r.c;
-        }
+        for (const aid of b.articleIds) insert.run(b.ruleId, aid);
       }
     });
     tx(bindings);
+    const countAfter = (
+      db.prepare(`SELECT COUNT(*) as c FROM bindings`).get() as { c: number }
+    ).c;
+    const inserted = countAfter - countBefore;
     return { inserted, duplicates: 0 };
   }
 
-  loadAllVersions(): ReadonlyArray<VersionRow> {
+  loadVersions(): ReadonlyArray<VersionInput> {
     const db = this.dbService.getDb();
-    return db
-      .prepare(`SELECT id, status, effective_from, ordinal FROM versions ORDER BY ordinal, id`)
+    const rows = db
+      .prepare(
+        `SELECT id, status, effective_from, ordinal FROM versions ORDER BY ordinal, id`,
+      )
       .all() as VersionRow[];
+    return rows.map((r) => ({
+      id: r.id,
+      status: r.status as VersionStatus,
+      effectiveFrom: r.effective_from,
+    }));
   }
 
-  loadAllArticles(): ReadonlyArray<ArticleRow> {
+  loadArticles(): ReadonlyArray<ArticleInput> {
     const db = this.dbService.getDb();
-    return db
+    const rows = db
       .prepare(
         `SELECT stable_id, version_id, label, article_key FROM articles ORDER BY article_key`,
       )
       .all() as ArticleRow[];
+    const refsByFrom = new Map<string, string[]>();
+    for (const r of this.loadReferences()) {
+      const list = refsByFrom.get(r.from_key);
+      if (list) list.push(r.to_stable_id);
+      else refsByFrom.set(r.from_key, [r.to_stable_id]);
+    }
+    return rows.map((r) => {
+      const refs = refsByFrom.get(r.article_key);
+      const out: ArticleInput = {
+        stableId: r.stable_id,
+        version: r.version_id,
+        label: r.label,
+      };
+      if (refs && refs.length > 0) out.references = Object.freeze([...refs].sort());
+      return out;
+    });
   }
 
-  loadAllReferences(): ReadonlyArray<ReferenceRow> {
+  loadReferences(): ReadonlyArray<ReferenceRow> {
     const db = this.dbService.getDb();
     return db
       .prepare(
-        `SELECT from_key, to_stable_id, to_key, resolved FROM article_references`,
+        `SELECT from_key, to_stable_id FROM article_references ORDER BY from_key, to_stable_id`,
       )
       .all() as ReferenceRow[];
   }
 
-  loadAllSuccessions(): ReadonlyArray<SuccessionRow> {
+  loadSuccessions(): ReadonlyArray<SuccessionInput> {
     const db = this.dbService.getDb();
-    return db
+    const rows = db
       .prepare(
-        `SELECT from_key, to_key, kind, from_stable_id, to_stable_id FROM successions`,
+        `SELECT from_stable_id, to_stable_id, kind FROM successions ORDER BY from_stable_id, to_stable_id, kind`,
       )
       .all() as SuccessionRow[];
+    const grouped = new Map<
+      string,
+      { kind: SuccessionKind; from: Set<string>; to: Set<string> }
+    >();
+    for (const r of rows) {
+      const key = `${r.kind}`;
+      let entry = grouped.get(key);
+      if (!entry) {
+        entry = {
+          kind: r.kind as SuccessionKind,
+          from: new Set<string>(),
+          to: new Set<string>(),
+        };
+        grouped.set(key, entry);
+      }
+      entry.from.add(r.from_stable_id);
+      entry.to.add(r.to_stable_id);
+    }
+    return [...grouped.values()].map((g) => ({
+      from: Object.freeze([...g.from].sort()),
+      to: Object.freeze([...g.to].sort()),
+      kind: g.kind,
+    }));
   }
 
-  loadAllBindings(): ReadonlyArray<BindingRow> {
+  loadBindings(): ReadonlyArray<BindingInput> {
     const db = this.dbService.getDb();
-    return db
-      .prepare(`SELECT rule_id, article_key FROM bindings ORDER BY rule_id, article_key`)
+    const rows = db
+      .prepare(
+        `SELECT rule_id, article_stable_id FROM bindings ORDER BY rule_id, article_stable_id`,
+      )
       .all() as BindingRow[];
+    const byRule = new Map<string, string[]>();
+    for (const r of rows) {
+      const list = byRule.get(r.rule_id);
+      if (list) list.push(r.article_stable_id);
+      else byRule.set(r.rule_id, [r.article_stable_id]);
+    }
+    return [...byRule.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([ruleId, ids]) => ({
+        ruleId,
+        articleIds: Object.freeze(ids),
+      }));
   }
 
   saveSnapshot(
@@ -280,9 +333,7 @@ export class RevisionRepository {
       }
     | undefined {
     const db = this.dbService.getDb();
-    return db
-      .prepare(`SELECT * FROM snapshots WHERE id = ?`)
-      .get(id) as
+    return db.prepare(`SELECT * FROM snapshots WHERE id = ?`).get(id) as
       | {
           readonly id: string;
           readonly created_at: string;

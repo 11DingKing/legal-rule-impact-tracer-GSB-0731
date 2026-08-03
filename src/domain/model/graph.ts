@@ -155,20 +155,27 @@ export function buildGraph(
     const toList = toArray(s.to);
     for (const fStable of fromList) {
       const fVersions = articlesByStable.get(fStable);
-      const fNode = fVersions ? fVersions[fVersions.length - 1] : undefined;
-      if (!fNode) continue;
+      if (!fVersions || fVersions.length === 0) continue;
       for (const tStable of toList) {
         const tVersions = articlesByStable.get(tStable);
-        const tNode = tVersions ? tVersions[tVersions.length - 1] : undefined;
-        if (!tNode) continue;
-        edges.push({
-          from: fNode.key,
-          to: tNode.key,
-          kind: 'SUCCESSION',
-          successionKind: s.kind,
-          ruleId: null,
-          refStableId: null,
-        });
+        if (!tVersions || tVersions.length === 0) continue;
+        for (const fNode of fVersions) {
+          const fVer = versions.get(fNode.versionId);
+          if (!fVer) continue;
+          for (const tNode of tVersions) {
+            const tVer = versions.get(tNode.versionId);
+            if (!tVer) continue;
+            if (tVer.ordinal <= fVer.ordinal) continue;
+            edges.push({
+              from: fNode.key,
+              to: tNode.key,
+              kind: 'SUCCESSION',
+              successionKind: s.kind,
+              ruleId: null,
+              refStableId: null,
+            });
+          }
+        }
       }
     }
   }
@@ -211,9 +218,18 @@ export function buildGraph(
 
   edges.sort(compareEdges);
 
+  const dedupedEdges: GraphEdge[] = [];
+  let lastKey = '';
+  for (const e of edges) {
+    const key = `${e.from}\u0000${e.to}\u0000${e.kind}\u0000${e.successionKind ?? ''}\u0000${e.ruleId ?? ''}\u0000${e.refStableId ?? ''}`;
+    if (key === lastKey) continue;
+    lastKey = key;
+    dedupedEdges.push(e);
+  }
+
   const outgoing = new Map<ArticleKey, GraphEdge[]>();
   const incoming = new Map<ArticleKey, GraphEdge[]>();
-  for (const e of edges) {
+  for (const e of dedupedEdges) {
     const outList = outgoing.get(e.from);
     if (outList) outList.push(e);
     else outgoing.set(e.from, [e]);
@@ -228,7 +244,7 @@ export function buildGraph(
     versions,
     articlesByKey,
     articlesByStable,
-    edges: Object.freeze(edges),
+    edges: Object.freeze(dedupedEdges),
     outgoing,
     incoming,
     rules,
