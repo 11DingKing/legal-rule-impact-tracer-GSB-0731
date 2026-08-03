@@ -5,6 +5,8 @@ import {
 } from './branded-types';
 import { ImpactLevel } from './enums';
 import { PropagationPath } from './propagation-path';
+import { QueryTimepoint } from './query-timepoint';
+import { EdgeSequence } from './edge-sequence';
 
 export interface ArticleImpact {
   readonly stableId: ArticleStableId;
@@ -38,7 +40,9 @@ export interface ImpactReport {
   readonly sourceVersionId: RegulationVersionId;
   readonly targetVersionId: RegulationVersionId;
   readonly queriedAt: string;
+  readonly timepoint: QueryTimepoint;
   readonly graphFingerprint: string;
+  readonly edgeSequence: EdgeSequence;
   readonly directArticles: readonly ArticleImpact[];
   readonly indirectArticles: readonly ArticleImpact[];
   readonly unaffectedArticles: readonly ArticleImpact[];

@@ -15,18 +15,33 @@ import { PropagationPath } from '../models/propagation-path';
 import { ReadOnlyRevisionGraph } from '../models/revision-graph';
 import { PathTracer, TraceSeed } from './path-tracer';
 import { ShortestPathCalculator } from './shortest-path-calculator';
+import { TimepointResolver } from './timepoint-resolver';
+import { EdgeSequenceBuilder } from './edge-sequence-builder';
+
+export interface AnalyzeOptions {
+  readonly asOf?: string;
+  readonly backfillCount?: number;
+}
 
 export class ImpactAnalyzer {
   private readonly pathTracer: PathTracer;
   private readonly shortestPathCalculator: ShortestPathCalculator;
+  private readonly timepointResolver: TimepointResolver;
+  private readonly edgeSequenceBuilder: EdgeSequenceBuilder;
 
   constructor(
     pathTracer?: PathTracer,
     shortestPathCalculator?: ShortestPathCalculator,
+    timepointResolver?: TimepointResolver,
+    edgeSequenceBuilder?: EdgeSequenceBuilder,
   ) {
     this.pathTracer = pathTracer ?? new PathTracer();
     this.shortestPathCalculator =
       shortestPathCalculator ?? new ShortestPathCalculator();
+    this.timepointResolver =
+      timepointResolver ?? new TimepointResolver();
+    this.edgeSequenceBuilder =
+      edgeSequenceBuilder ?? new EdgeSequenceBuilder();
   }
 
   analyze(
@@ -34,8 +49,22 @@ export class ImpactAnalyzer {
     sourceVersionId: RegulationVersionId,
     targetVersionId: RegulationVersionId,
     queriedAt: string,
+    options?: AnalyzeOptions,
   ): ImpactReport {
     this.validateVersions(graph, sourceVersionId, targetVersionId);
+
+    const asOf = options?.asOf ?? queriedAt;
+    const backfillCount = options?.backfillCount ?? 0;
+
+    const timepoint = this.timepointResolver.resolve(
+      graph,
+      sourceVersionId,
+      targetVersionId,
+      asOf,
+      backfillCount,
+    );
+
+    const edgeSequence = this.edgeSequenceBuilder.build(graph);
 
     const { directIds, missingSuccessions } = this.identifyDirectImpacts(
       graph,
@@ -97,7 +126,9 @@ export class ImpactAnalyzer {
       sourceVersionId,
       targetVersionId,
       queriedAt,
+      timepoint,
       graphFingerprint: graph.fingerprint(),
+      edgeSequence,
       directArticles,
       indirectArticles,
       unaffectedArticles,

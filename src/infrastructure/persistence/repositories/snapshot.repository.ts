@@ -13,6 +13,7 @@ interface SnapshotRow {
   target_version_id: string;
   queried_at: string;
   graph_fingerprint: string;
+  edge_sequence_hash: string;
   report_json: string;
 }
 
@@ -25,8 +26,8 @@ export class SnapshotRepository {
     const stmt = db.prepare(
       `INSERT INTO snapshots
         (snapshot_id, created_at, source_version_id, target_version_id,
-         queried_at, graph_fingerprint, report_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         queried_at, graph_fingerprint, edge_sequence_hash, report_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     stmt.run(
       snapshot.snapshotId,
@@ -35,6 +36,7 @@ export class SnapshotRepository {
       snapshot.report.targetVersionId,
       snapshot.report.queriedAt,
       snapshot.report.graphFingerprint,
+      snapshot.report.edgeSequence.hash,
       JSON.stringify(snapshot.report),
     );
   }

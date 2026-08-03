@@ -519,4 +519,202 @@ describe('Legal Rule Impact Tracer — Acceptance (e2e)', () => {
       expect(r1.indirectArticles).toEqual(r2.indirectArticles);
     });
   });
+
+  describe('Four timepoints and backfill via HTTP', () => {
+    const TIMELINE_GRAPH = {
+      versions: [
+        { id: 'LAW-V1', status: 'EFFECTIVE', effectiveFrom: '2026-01-01' },
+        { id: 'LAW-DRAFT-2', status: 'DRAFT', effectiveFrom: null },
+        { id: 'LAW-V2', status: 'PUBLISHED', effectiveFrom: '2027-01-01' },
+      ],
+      articles: [
+        { stableId: 'T-A', version: 'LAW-V1', label: 'V1-A', references: [] },
+        { stableId: 'T-B', version: 'LAW-V1', label: 'V1-B', references: ['T-A'] },
+        { stableId: 'T-C', version: 'LAW-V1', label: 'V1-C', references: [] },
+        { stableId: 'T-D', version: 'LAW-V1', label: 'V1-D', references: [] },
+        { stableId: 'T-A1', version: 'LAW-DRAFT-2', label: 'D-A1', references: [] },
+        { stableId: 'T-A2', version: 'LAW-DRAFT-2', label: 'D-A2', references: [] },
+        { stableId: 'T-M', version: 'LAW-DRAFT-2', label: 'D-M', references: [] },
+        { stableId: 'T-A1V2', version: 'LAW-V2', label: 'V2-A1', references: [] },
+        { stableId: 'T-A2V2', version: 'LAW-V2', label: 'V2-A2', references: [] },
+        { stableId: 'T-MV2', version: 'LAW-V2', label: 'V2-M', references: [] },
+        { stableId: 'T-C1', version: 'LAW-V2', label: 'V2-C1', references: ['T-A1V2'] },
+        { stableId: 'T-D1', version: 'LAW-V2', label: 'V2-D1', references: [] },
+      ],
+      succession: [
+        { from: 'T-A', to: ['T-A1', 'T-A2'], kind: 'SPLIT' },
+        { from: 'T-A', to: ['T-M'], kind: 'MERGE' },
+        { from: 'T-B', to: ['T-M'], kind: 'MERGE' },
+        { from: 'T-A', to: ['T-A1V2', 'T-A2V2'], kind: 'SPLIT' },
+        { from: 'T-A', to: ['T-MV2'], kind: 'MERGE' },
+        { from: 'T-B', to: ['T-MV2'], kind: 'MERGE' },
+        { from: 'T-C', to: ['T-C1'], kind: 'REVISE' },
+      ],
+      bindings: [
+        { ruleId: 'T-RULE-A', articleIds: ['T-A'] },
+        { ruleId: 'T-RULE-B', articleIds: ['T-B'] },
+        { ruleId: 'T-RULE-C', articleIds: ['T-C'] },
+        { ruleId: 'T-RULE-D', articleIds: ['T-D'] },
+        { ruleId: 'T-RULE-C1', articleIds: ['T-C1'] },
+      ],
+    };
+
+    beforeEach(async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/import')
+        .send(TIMELINE_GRAPH)
+        .expect(200);
+    });
+
+    it('timepoint 1 — draft period reports DRAFT phase', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/impact/query')
+        .send({
+          sourceVersionId: 'LAW-V1',
+          targetVersionId: 'LAW-DRAFT-2',
+          asOf: '2026-06-01T00:00:00.000Z',
+        })
+        .expect(200);
+
+      expect(res.body.report.timepoint.phase).toBe('DRAFT');
+      expect(res.body.report.timepoint.asOf).toBe(
+        '2026-06-01T00:00:00.000Z',
+      );
+      expect(res.body.report.edgeSequence.hash).toMatch(/^es_/);
+      expect(res.body.report.graphFingerprint).toMatch(/^fp_/);
+    });
+
+    it('timepoint 2 — published but not effective reports PUBLISHED_NOT_EFFECTIVE', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/impact/query')
+        .send({
+          sourceVersionId: 'LAW-V1',
+          targetVersionId: 'LAW-V2',
+          asOf: '2026-06-01T00:00:00.000Z',
+        })
+        .expect(200);
+
+      expect(res.body.report.timepoint.phase).toBe(
+        'PUBLISHED_NOT_EFFECTIVE',
+      );
+      expect(res.body.report.timepoint.targetVersion.effectiveAtQuery).toBe(
+        false,
+      );
+      const missing = res.body.report.missingSuccessions.map(
+        (m: { stableId: string }) => m.stableId,
+      );
+      expect(missing).toContain('T-D');
+    });
+
+    it('timepoint 3 — after effective reports EFFECTIVE phase', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/impact/query')
+        .send({
+          sourceVersionId: 'LAW-V1',
+          targetVersionId: 'LAW-V2',
+          asOf: '2027-06-01T00:00:00.000Z',
+        })
+        .expect(200);
+
+      expect(res.body.report.timepoint.phase).toBe('EFFECTIVE');
+      expect(res.body.report.timepoint.targetVersion.effectiveAtQuery).toBe(
+        true,
+      );
+    });
+
+    it('timepoint 4 — backfill adds edge, reports POST_BACKFILL, old snapshot unchanged', async () => {
+      const beforeRes = await request(app.getHttpServer())
+        .post('/api/v1/impact/query')
+        .send({
+          sourceVersionId: 'LAW-V1',
+          targetVersionId: 'LAW-V2',
+          asOf: '2027-06-01T00:00:00.000Z',
+        })
+        .expect(200);
+
+      const beforeSnapshotId = beforeRes.body.snapshotId;
+      const beforeMissing =
+        beforeRes.body.report.missingSuccessions.map(
+          (m: { stableId: string }) => m.stableId,
+        );
+      expect(beforeMissing).toContain('T-D');
+      const beforeFingerprint = beforeRes.body.report.graphFingerprint;
+      const beforeEdgeHash = beforeRes.body.report.edgeSequence.hash;
+
+      const backfillRes = await request(app.getHttpServer())
+        .post('/api/v1/backfill')
+        .send({ from: 'T-D', to: 'T-D1', kind: 'REVISE' })
+        .expect(200);
+
+      expect(backfillRes.body.added).toBe(true);
+      expect(backfillRes.body.backfillCount).toBe(1);
+      expect(backfillRes.body.graphFingerprint).not.toBe(
+        beforeFingerprint,
+      );
+
+      const afterRes = await request(app.getHttpServer())
+        .post('/api/v1/impact/query')
+        .send({
+          sourceVersionId: 'LAW-V1',
+          targetVersionId: 'LAW-V2',
+          asOf: '2027-06-01T00:00:00.000Z',
+        })
+        .expect(200);
+
+      expect(afterRes.body.report.timepoint.phase).toBe(
+        'POST_BACKFILL',
+      );
+      expect(afterRes.body.report.timepoint.backfillCount).toBe(1);
+      const afterMissing =
+        afterRes.body.report.missingSuccessions.map(
+          (m: { stableId: string }) => m.stableId,
+        );
+      expect(afterMissing).not.toContain('T-D');
+      expect(afterRes.body.report.graphFingerprint).not.toBe(
+        beforeFingerprint,
+      );
+      expect(afterRes.body.report.edgeSequence.hash).not.toBe(
+        beforeEdgeHash,
+      );
+
+      const oldSnapshot = await request(app.getHttpServer())
+        .get(`/api/v1/snapshots/${beforeSnapshotId}`)
+        .expect(200);
+
+      expect(
+        oldSnapshot.body.report.missingSuccessions.find(
+          (m: { stableId: string }) => m.stableId === 'T-D',
+        ),
+      ).toBeDefined();
+      expect(oldSnapshot.body.report.graphFingerprint).toBe(
+        beforeFingerprint,
+      );
+      expect(oldSnapshot.body.report.edgeSequence.hash).toBe(
+        beforeEdgeHash,
+      );
+      expect(oldSnapshot.body.report.timepoint.backfillCount).toBe(0);
+    });
+
+    it('backfill is idempotent — duplicate backfill does not increase count', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/backfill')
+        .send({ from: 'T-D', to: 'T-D1', kind: 'REVISE' })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/backfill')
+        .send({ from: 'T-D', to: 'T-D1', kind: 'REVISE' })
+        .expect(200);
+
+      expect(res.body.added).toBe(false);
+      expect(res.body.backfillCount).toBe(1);
+    });
+
+    it('rejects backfill referencing unknown article with 400', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/backfill')
+        .send({ from: 'NOPE', to: 'T-D1', kind: 'REVISE' })
+        .expect(400);
+    });
+  });
 });

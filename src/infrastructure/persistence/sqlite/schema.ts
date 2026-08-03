@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS succession_edges (
   to_id TEXT NOT NULL REFERENCES articles(stable_id),
   kind TEXT NOT NULL,
   ordinal INTEGER NOT NULL DEFAULT 0,
+  backfilled INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (from_id, to_id, kind)
 );
 
@@ -33,6 +34,15 @@ CREATE TABLE IF NOT EXISTS bindings (
   PRIMARY KEY (rule_id, article_id)
 );
 
+CREATE TABLE IF NOT EXISTS backfill_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  from_id TEXT NOT NULL,
+  to_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  backfilled_at TEXT NOT NULL,
+  UNIQUE(from_id, to_id, kind)
+);
+
 CREATE TABLE IF NOT EXISTS snapshots (
   snapshot_id TEXT PRIMARY KEY,
   created_at TEXT NOT NULL,
@@ -40,6 +50,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
   target_version_id TEXT NOT NULL,
   queried_at TEXT NOT NULL,
   graph_fingerprint TEXT NOT NULL,
+  edge_sequence_hash TEXT NOT NULL,
   report_json TEXT NOT NULL
 );
 

@@ -12,6 +12,7 @@ export class ImpactController {
     return this.impactQueryService.query(
       dto.sourceVersionId,
       dto.targetVersionId,
+      dto.asOf,
     );
   }
 }

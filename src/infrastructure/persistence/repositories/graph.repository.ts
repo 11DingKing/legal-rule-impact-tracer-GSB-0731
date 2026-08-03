@@ -262,6 +262,57 @@ export class GraphRepository {
     return { versions, articles, succession, bindings };
   }
 
+  backfillSuccession(
+    fromId: string,
+    toId: string,
+    kind: string,
+  ): { added: boolean; backfillCount: number } {
+    const db = this.sqlite.getDb();
+
+    const fromArticle = db
+      .prepare(`SELECT stable_id FROM articles WHERE stable_id = ?`)
+      .get(fromId) as { stable_id: string } | undefined;
+    if (!fromArticle) {
+      throw new Error(`Cannot backfill: source article not found: ${fromId}`);
+    }
+    const toArticle = db
+      .prepare(`SELECT stable_id FROM articles WHERE stable_id = ?`)
+      .get(toId) as { stable_id: string } | undefined;
+    if (!toArticle) {
+      throw new Error(`Cannot backfill: target article not found: ${toId}`);
+    }
+
+    const edgeInfo = db
+      .prepare(
+        `INSERT OR IGNORE INTO succession_edges (from_id, to_id, kind, ordinal, backfilled)
+         VALUES (?, ?, ?, 0, 1)`,
+      )
+      .run(fromId, toId, kind);
+
+    const added = edgeInfo.changes > 0;
+
+    if (added) {
+      db.prepare(
+        `INSERT OR IGNORE INTO backfill_events (from_id, to_id, kind, backfilled_at)
+         VALUES (?, ?, ?, ?)`,
+      ).run(fromId, toId, kind, new Date().toISOString());
+    }
+
+    const countRow = db
+      .prepare(`SELECT COUNT(*) as cnt FROM backfill_events`)
+      .get() as { cnt: number };
+
+    return { added, backfillCount: countRow.cnt };
+  }
+
+  countBackfills(): number {
+    const db = this.sqlite.getDb();
+    const row = db
+      .prepare(`SELECT COUNT(*) as cnt FROM backfill_events`)
+      .get() as { cnt: number };
+    return row.cnt;
+  }
+
   clearAll(): void {
     const db = this.sqlite.getDb();
     db.exec(`
@@ -270,6 +321,7 @@ export class GraphRepository {
       DELETE FROM article_references;
       DELETE FROM articles;
       DELETE FROM versions;
+      DELETE FROM backfill_events;
     `);
   }
 }

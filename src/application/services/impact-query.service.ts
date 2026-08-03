@@ -28,16 +28,23 @@ export class ImpactQueryService {
   query(
     sourceVersionId: string,
     targetVersionId: string,
+    asOf?: string,
   ): ImpactSnapshot {
     const graphData = this.graphRepo.loadGraphData();
     const graph = this.graphBuilder.build(graphData);
 
     const queriedAt = new Date().toISOString();
+    const backfillCount = this.graphRepo.countBackfills();
+
     const report: ImpactReport = this.impactAnalyzer.analyze(
       graph,
       sourceVersionId as RegulationVersionId,
       targetVersionId as RegulationVersionId,
       queriedAt,
+      {
+        asOf: asOf ?? queriedAt,
+        backfillCount,
+      },
     );
 
     const snapshot = this.snapshotFactory.create(report);

@@ -11,7 +11,7 @@ and freezes every query into an immutable snapshot.
 - **Node.js 24** / **TypeScript 5.5** (strict mode, no `any`)
 - **NestJS 10** (HTTP controllers + dependency injection)
 - **SQLite** via `better-sqlite3` (persistence, immutable snapshots)
-- **Jest** (80 unit tests + 16 e2e acceptance tests)
+- **Jest** (100 unit tests + 22 e2e acceptance tests)
 
 ## Architecture
 
@@ -22,7 +22,7 @@ controllers nor SQLite adapters contain any impact-propagation logic.
 src/
   domain/                              # Pure, zero NestJS/SQLite dependencies
     models/                            # Entities, value objects, RevisionGraph
-    services/                          # GraphBuilder, PathTracer, ShortestPathCalculator, ImpactAnalyzer, SnapshotFactory
+    services/                          # GraphBuilder, PathTracer, ShortestPathCalculator, TimepointResolver, EdgeSequenceBuilder, ImpactAnalyzer, SnapshotFactory
     errors/                            # DomainError hierarchy
     ports/                             # Input interfaces
   application/
@@ -125,11 +125,25 @@ Response:
 
 ### POST /api/v1/impact/query
 
-Computes the impact of revising from one version to another.
+Computes the impact of revising from one version to another at a point in time.
 
 ```json
-{"sourceVersionId": "LAW-V1", "targetVersionId": "LAW-V2"}
+{
+  "sourceVersionId": "LAW-V1",
+  "targetVersionId": "LAW-V2",
+  "asOf": "2027-06-01T00:00:00.000Z"
+}
 ```
+
+The optional `asOf` field (ISO-8601) determines the query timepoint. When omitted,
+the current server time is used. Each report binds four immutable anchors:
+
+- **Regulation versions** — `sourceVersionId`, `targetVersionId`
+- **Query moment** — `queriedAt` (when the analysis ran) and `timepoint.asOf` (the
+  logical effective date used for phase resolution)
+- **Graph snapshot hash** — `graphFingerprint`
+- **Propagation edge sequence** — `edgeSequence.hash` plus the full ordered
+  `edgeSequence.entries` list
 
 Response contains:
 
@@ -137,6 +151,7 @@ Response contains:
 |----------------------|--------------------------------------------------------------------------|
 | `snapshotId`         | UUID of the immutable snapshot stored for this query                    |
 | `createdAt`          | ISO-8601 timestamp when the snapshot was created                        |
+| `report.timepoint`   | Query phase (`DRAFT`, `PUBLISHED_NOT_EFFECTIVE`, `EFFECTIVE`, `POST_BACKFILL`), version phase info, and backfill count |
 | `report.directArticles` | Articles directly changed by succession (sources + successors)       |
 | `report.indirectArticles` | Articles reached via reverse cross-reference propagation           |
 | `report.unaffectedArticles` | Articles in neither set                                         |
@@ -145,6 +160,46 @@ Response contains:
 | `report.paths`       | All propagation paths, sorted by depth then canonical key              |
 | `report.ruleWitnesses` | One shortest propagation witness per affected rule, plus count of all equal-length shortest paths |
 | `report.graphFingerprint` | Hash of the graph state at query time                             |
+| `report.edgeSequence` | Canonical ordered list of all edges (succession + cross-references) with a hash |
+
+#### Query phases
+
+| Phase | Condition |
+|-------|-----------|
+| `DRAFT` | Target version has status `DRAFT` |
+| `PUBLISHED_NOT_EFFECTIVE` | Target is `PUBLISHED` but `effectiveFrom` is after `asOf` |
+| `EFFECTIVE` | Target is `EFFECTIVE`, or `PUBLISHED` with `effectiveFrom <= asOf` |
+| `POST_BACKFILL` | At least one succession edge has been backfilled (see below) |
+
+### POST /api/v1/backfill
+
+Records a previously missing succession edge after the fact. The edge is appended
+to the graph and a `backfill_events` row is recorded. **Existing snapshots are
+never modified** — old snapshots retain their original `graphFingerprint`,
+`edgeSequence.hash`, and `missingSuccessions` diagnosis.
+
+```json
+{
+  "from": "T-D",
+  "to": "T-D1",
+  "kind": "REVISE"
+}
+```
+
+Response:
+
+```json
+{
+  "added": true,
+  "backfillCount": 1,
+  "graphFingerprint": "fp_..."
+}
+```
+
+After backfill, new impact queries report phase `POST_BACKFILL`, the previously
+missing article no longer appears in `missingSuccessions`, and both
+`graphFingerprint` and `edgeSequence.hash` change. Duplicate backfills are
+idempotent (`added: false`, count unchanged).
 
 #### Propagation paths
 
@@ -261,6 +316,39 @@ This produces:
 ART-D appears in `missingSuccessions` with a stable diagnostic. No edge is
 guessed.
 
+## Four timepoints and backfill
+
+The timeline fixture exercises the full lifecycle of a revision across four
+query moments:
+
+```
+LAW-V1 (EFFECTIVE, 2026-01-01)
+LAW-DRAFT-2 (DRAFT)
+LAW-V2 (PUBLISHED, effectiveFrom 2027-01-01)
+T-D in V1 has NO succession edge to V2 initially
+T-D1 exists in V2 as the backfill target
+```
+
+| # | asOf | Target | Phase | Missing T-D? |
+|---|------|--------|-------|--------------|
+| 1 | 2026-06-01 | LAW-DRAFT-2 | `DRAFT` | yes |
+| 2 | 2026-06-01 | LAW-V2 | `PUBLISHED_NOT_EFFECTIVE` | yes |
+| 3 | 2027-06-01 | LAW-V2 | `EFFECTIVE` | yes |
+| 4 | 2027-06-01 | LAW-V2 | `POST_BACKFILL` | **no** (edge added) |
+
+At timepoint 4, `POST /api/v1/backfill` is called with
+`{from: "T-D", to: "T-D1", kind: "REVISE"}`. The new edge changes the graph
+fingerprint and edge sequence hash, and T-D becomes DIRECT. Crucially:
+
+- The snapshot from timepoint 3 is retrieved by ID and replayed byte-for-byte.
+- Its `missingSuccessions` still contains T-D.
+- Its `graphFingerprint` and `edgeSequence.hash` are unchanged.
+- Its `timepoint.backfillCount` remains 0.
+
+Each report binds `sourceVersionId`, `targetVersionId`, `queriedAt`,
+`timepoint.asOf`, `graphFingerprint`, and `edgeSequence.hash` into the immutable
+snapshot, so the exact graph state and query moment are always auditable.
+
 ## Deterministic paths and cycle handling
 
 - **Cycle safety.** The DFS uses a per-path visited set; a node is never visited
@@ -283,15 +371,16 @@ When an impact query is executed:
 4. `SnapshotFactory` wraps it with a UUID and creation timestamp.
 5. The **entire report JSON** is inserted into the `snapshots` table.
 
-Subsequent imports (new versions, added edges, changed labels) do not modify any
-existing snapshot row. Retrieving a snapshot returns exactly the data that was
-computed at query time, including the original `graphFingerprint`.
+Subsequent imports (new versions, added edges, changed labels) or **backfilled
+succession edges** do not modify any existing snapshot row. Retrieving a snapshot
+returns exactly the data that was computed at query time, including the original
+`graphFingerprint`, `edgeSequence.hash`, and `missingSuccessions` diagnosis.
 
 ## Testing
 
 ```bash
-npm test          # 80 domain unit tests
-npm run test:e2e  # 16 HTTP acceptance tests
+npm test          # 100 domain unit tests
+npm run test:e2e  # 22 HTTP acceptance tests
 ```
 
 Coverage includes:
@@ -299,13 +388,15 @@ Coverage includes:
 - One-to-many splits and many-to-one merges
 - Same stableId participating in both SPLIT and MERGE (LAW-DRAFT-2)
 - Shortest propagation witness with equal-length path counting
-- Cross-reference cycles (termination + complete coverage)
+- Four timepoint phases: DRAFT, PUBLISHED_NOT_EFFECTIVE, EFFECTIVE, POST_BACKFILL
+- Backfilled succession edges with proof that old snapshots do not drift
+- Cross-reference cycles (termination + complete coverage + cache invalidation)
 - Missing succession reporting (never guessed)
 - Same-day multiple target versions
-- Duplicate / idempotent imports
+- Duplicate / idempotent imports and backfills
 - Byte-level determinism: reversed import order, duplicate imports, cycle subgraphs
 - Path deduplication and stable sorting on large graphs
-- Snapshot immutability after data changes
+- Snapshot immutability after data changes and backfills
 
 ## Project layout reference
 
@@ -313,7 +404,10 @@ Coverage includes:
 - Impact analyzer: [impact-analyzer.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain/services/impact-analyzer.ts)
 - Path tracer: [path-tracer.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain/services/path-tracer.ts)
 - Shortest path calculator: [shortest-path-calculator.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain/services/shortest-path-calculator.ts)
+- Timepoint resolver: [timepoint-resolver.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain/services/timepoint-resolver.ts)
+- Edge sequence builder: [edge-sequence-builder.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain/services/edge-sequence-builder.ts)
 - Graph builder: [graph-builder.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain/services/graph-builder.ts)
 - SQLite schema: [schema.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/infrastructure/persistence/sqlite/schema.ts)
 - HTTP controllers: [controllers](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/interfaces/http/controllers)
 - Acceptance tests: [acceptance.e2e-spec.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/test/acceptance.e2e-spec.ts)
+- Timepoint unit tests: [timepoint.spec.ts](file:///Users/huangding/Documents/GSB%203/0731/legal-rule-impact-tracer-GSB-0731-Steve/src/domain/services/timepoint.spec.ts)
